@@ -1,717 +1,513 @@
+// 阿里云对象存储服务（OSS）Flutter SDK
+// 基于阿里云 OSS REST API 构建
+// 阿里云文档: https://help.aliyun.com/zh/oss/developer-reference/overview
+
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
-import 'package:dio/dio.dart';
-import 'package:flutter_oss_aliyun/src/auth_mixin.dart';
-import 'package:flutter_oss_aliyun/src/client_api.dart';
-import 'package:flutter_oss_aliyun/src/extension/date_extension.dart';
-import 'package:flutter_oss_aliyun/src/extension/file_extension.dart';
-import 'package:flutter_oss_aliyun/src/model/callback.dart';
-import 'package:flutter_oss_aliyun/src/model/request.dart';
-import 'package:flutter_oss_aliyun/src/model/request_option.dart';
+import 'package:xml/xml.dart';
 
-import 'extension/option_extension.dart';
+import 'auth_mixin.dart';
+import 'client_api.dart';
+import 'extension/date_extension.dart';
 import 'http_mixin.dart';
-import 'model/asset_entity.dart';
 import 'model/auth.dart';
 import 'model/enums.dart';
-import 'util/dio_client.dart';
+import 'model/request.dart';
+import 'model/request/append_object_request.dart';
+import 'model/request/copy_object_request.dart';
+import 'model/request/delete_object_request.dart';
+import 'model/request/get_object_request.dart';
+import 'model/request/list_buckets_request.dart';
+import 'model/request/list_objects_request.dart';
+import 'model/request/put_object_request.dart';
+import 'model/result/append_object_result.dart';
+import 'model/result/bucket_acl.dart';
+import 'model/result/bucket_info.dart';
+import 'model/result/bucket_stat.dart';
+import 'model/result/copy_object_result.dart';
+import 'model/result/delete_object_result.dart';
+import 'model/result/list_buckets_result.dart';
+import 'model/result/list_objects_result.dart';
+import 'model/result/object_meta.dart';
+import 'model/result/put_object_result.dart';
+import 'model/result/regions_result.dart';
+import 'util/cancel_token.dart';
+import 'util/multipart_file.dart';
+import 'util/oss_exception.dart';
+import 'util/oss_http_client.dart';
+import 'util/oss_response.dart';
 
 class Client with AuthMixin, HttpMixin implements ClientApi {
   static Client? _instance;
-
   factory Client() => _instance!;
 
   final String endpoint;
   final String bucketName;
-  static late Dio _dio;
+  final OssHttpClient _http;
 
-  Client._({
-    required this.endpoint,
-    required this.bucketName,
-  });
+  Client._({required this.endpoint, required this.bucketName, bool logging = false})
+      : _http = OssHttpClient(logging: logging);
 
   static Client init({
-    String? stsUrl,
     required String ossEndpoint,
     required String bucketName,
-    FutureOr<Auth> Function()? authGetter,
-    Dio? dio,
+    required FutureOr<Auth> Function() authenticator,
+    bool logging = false,
   }) {
-    assert(stsUrl != null || authGetter != null);
-    _dio = dio ?? RestClient.getInstance();
-
-    final authGet = authGetter ??
-        () async {
-          final response = await _dio.get<dynamic>(stsUrl!);
-          return Auth.fromJson(response.data!);
-        };
-    _instance = Client._(endpoint: ossEndpoint, bucketName: bucketName)
-      ..authGetter = authGet;
+    _instance = Client._(endpoint: ossEndpoint, bucketName: bucketName, logging: logging)
+      ..authenticator = authenticator;
     return _instance!;
   }
 
-  /// get object(file) from oss server
-  /// [fileKey] is the object name from oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<Response<dynamic>> getObject(
-    String fileKey, {
-    String? bucketName,
+  // ----- helpers -----
+
+  String _url(String bucket, String path, [Map<String, dynamic>? query]) {
+    final sb = StringBuffer('https://$bucket.$endpoint/$path');
+    if (query != null && query.isNotEmpty) {
+      final params = query.entries
+          .where((e) => e.value != null)
+          .map((e) => '${e.key}=${Uri.encodeComponent(e.value.toString())}')
+          .join('&');
+      sb.write('?$params');
+    }
+    return sb.toString();
+  }
+
+  String _bucket(String? override) => override ?? bucketName;
+
+  Future<StringResponse> _signedGet(
+    String bucket,
+    String resource, {
+    Map<String, dynamic>? query,
     CancelToken? cancelToken,
-    Options? options,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, fileKey);
-
-    return _dio.get(
-      request.url,
+    final auth = await getAuth();
+    final req = HttpRequest.get(_url(bucket, resource, query));
+    auth.sign(req, bucket, resource);
+    return _http.get(
+      req.url,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: options == null
-          ? Options(headers: request.headers)
-          : options.copyWith(headers: request.headers),
       onReceiveProgress: onReceiveProgress,
     );
   }
 
-  /// get object(file) from oss server
-  /// [fileKey] is the object name from oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
+  // ==================== Object Operations ====================
+
   @override
-  Future<bool> doesObjectExist(
-    String fileKey, {
+  Future<PutObjectResult> putObject(PutObjectRequest request, {CancelToken? cancelToken}) async {
+    final bucket = request.bucketName ?? bucketName;
+    final auth = await getAuth();
+    final mf = MultipartFile.fromBytes(request.data, filename: request.key);
+    final headers = <String, dynamic>{
+      'content-type': contentType(request.key),
+      'content-length': mf.length,
+      'x-oss-forbid-overwrite': !(request.override ?? true),
+      'x-oss-object-acl': (request.aclMode ?? AclMode.inherited).content,
+      'x-oss-storage-class': (request.storageType ?? StorageType.standard).content,
+      ...?request.headers,
+      if (request.callback != null) ...request.callback!.toHeaders(),
+    };
+    final url = 'https://$bucket.$endpoint/${request.key}';
+    final httpReq = HttpRequest.put(url, headers: headers);
+    auth.sign(httpReq, bucket, request.key);
+    final resp = await _http.put(
+      httpReq.url,
+      body: mf.stream,
+      contentLength: mf.length,
+      headers: httpReq.headers,
+      cancelToken: cancelToken,
+      onSendProgress: request.onSendProgress,
+    );
+    return PutObjectResult.fromOssResponse(resp);
+  }
+
+  @override
+  Future<PutObjectResult> putObjectFile(
+    PutObjectFileRequest request, {
+    CancelToken? cancelToken,
+  }) async {
+    final bucket = request.bucketName ?? bucketName;
+    final filename = request.key ?? request.filepath.split(Platform.pathSeparator).last;
+    final auth = await getAuth();
+    final mf = await MultipartFile.fromFile(request.filepath, filename: filename);
+    final headers = <String, dynamic>{
+      'content-type': contentType(filename),
+      'content-length': mf.length,
+      'x-oss-forbid-overwrite': !(request.override ?? true),
+      'x-oss-object-acl': (request.aclMode ?? AclMode.inherited).content,
+      'x-oss-storage-class': (request.storageType ?? StorageType.standard).content,
+      ...?request.headers,
+      if (request.callback != null) ...request.callback!.toHeaders(),
+    };
+    final url = 'https://$bucket.$endpoint/$filename';
+    final httpReq = HttpRequest.put(url, headers: headers);
+    auth.sign(httpReq, bucket, filename);
+    final resp = await _http.put(
+      httpReq.url,
+      body: mf.stream,
+      contentLength: mf.length,
+      headers: httpReq.headers,
+      cancelToken: cancelToken,
+      onSendProgress: request.onSendProgress,
+    );
+    return PutObjectResult.fromOssResponse(resp);
+  }
+
+  @override
+  Future<AppendObjectResult> appendObject(
+    AppendObjectRequest request, {
+    CancelToken? cancelToken,
+  }) async {
+    final bucket = request.bucketName ?? bucketName;
+    final auth = await getAuth();
+    final mf = MultipartFile.fromBytes(request.data, filename: request.key);
+    final pos = request.position ?? 0;
+    final headers = <String, dynamic>{
+      'content-type': contentType(request.key),
+      'content-length': mf.length,
+      'x-oss-object-acl': (request.aclMode ?? AclMode.inherited).content,
+      'x-oss-storage-class': (request.storageType ?? StorageType.standard).content,
+      ...?request.headers,
+    };
+    final url = 'https://$bucket.$endpoint/${request.key}?append&position=$pos';
+    final httpReq = HttpRequest.post(url, headers: headers);
+    auth.sign(httpReq, bucket, '${request.key}?append&position=$pos');
+    final resp = await _http.post(
+      httpReq.url,
+      body: mf.stream,
+      contentLength: mf.length,
+      headers: httpReq.headers,
+      cancelToken: cancelToken,
+      onSendProgress: request.onSendProgress,
+    );
+    return AppendObjectResult.fromOssResponse(resp);
+  }
+
+  @override
+  Future<CopyObjectResult> copyObject(CopyObjectRequest request, {CancelToken? cancelToken}) async {
+    final sourceBucket = request.sourceBucketName ?? bucketName;
+    final targetBucket = request.targetBucketName ?? sourceBucket;
+    final copySource = '/$sourceBucket/${request.sourceKey}';
+    final headers = <String, dynamic>{
+      'content-type': contentType(request.targetKey),
+      'x-oss-copy-source': copySource,
+      'x-oss-forbid-overwrite': !(request.override ?? true),
+      'x-oss-object-acl': (request.aclMode ?? AclMode.inherited).content,
+      'x-oss-storage-class': (request.storageType ?? StorageType.standard).content,
+      ...?request.headers,
+    };
+    final auth = await getAuth();
+    final url = 'https://$targetBucket.$endpoint/${request.targetKey}';
+    final httpReq = HttpRequest.put(url, headers: headers);
+    auth.sign(httpReq, targetBucket, request.targetKey);
+    final resp = await _http.put(
+      httpReq.url,
+      headers: httpReq.headers,
+      cancelToken: cancelToken,
+    );
+    if (resp.data.isNotEmpty) {
+      return CopyObjectResult.fromXml(XmlDocument.parse(resp.data));
+    }
+    return CopyObjectResult.fromResponse(resp.statusCode, resp.headers);
+  }
+
+  @override
+  Future<BytesResponse> getObject(GetObjectRequest request, {CancelToken? cancelToken}) async {
+    final bucket = _bucket(request.bucketName);
+    final auth = await getAuth();
+    final query = request.toParameters();
+    final base = request.key;
+    final url = _url(bucket, base, query);
+    final httpReq = HttpRequest.get(url);
+    auth.sign(httpReq, bucket, base);
+    httpReq.headers.addAll(request.toHeaders());
+    return _http.getBytes(
+      httpReq.url,
+      headers: httpReq.headers,
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
+  Future<ObjectMeta> getObjectMeta(
+    String key, {
     String? bucketName,
     CancelToken? cancelToken,
-    Options? options,
   }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.head('https://$bucket.$endpoint/$key');
+    auth.sign(req, bucket, key);
+    final resp = await _http.head(
+      req.url,
+      headers: req.headers,
+      cancelToken: cancelToken,
+    );
+    return ObjectMeta.fromOssResponse(resp);
+  }
 
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest.head(url);
-    auth.sign(request, bucket, fileKey);
-
+  @override
+  Future<bool> doesObjectExist(
+    String key, {
+    String? bucketName,
+    CancelToken? cancelToken,
+  }) async {
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.head('https://$bucket.$endpoint/$key');
+    auth.sign(req, bucket, key);
     try {
-      await _dio.head(
-        request.url,
-        cancelToken: cancelToken,
-        options: options == null
-            ? Options(headers: request.headers)
-            : options.copyWith(headers: request.headers),
-      );
+      await _http.head(req.url, headers: req.headers, cancelToken: cancelToken);
       return true;
-    } on DioException catch (error, _) {
-      if (error.response?.statusCode == 404) {
-        return false;
-      }
+    } on OssException catch (e) {
+      if (e.statusCode == 404) return false;
       rethrow;
     }
   }
 
-  /// get signed url from oss server
-  /// [fileKey] is the object name from oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  /// [expireSeconds] is optional, default expired time are 60 seconds
   @override
-  Future<String> getSignedUrl(
-    String fileKey, {
-    String? bucketName,
-    int expireSeconds = 60,
-    Map<String, dynamic>? params,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-    final int expires = DateTime.now().secondsSinceEpoch() + expireSeconds;
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final Map<String, dynamic> parameters = {
-      "OSSAccessKeyId": auth.accessKey,
-      "Expires": expires,
-      "Signature": auth.getSignature(expires, bucket, fileKey, params: params),
-      "security-token": auth.encodedToken
-    };
-    parameters.addAll(params ?? {});
-    final HttpRequest request = HttpRequest.get(url, parameters: parameters);
-
-    return request.url;
-  }
-
-  /// get signed url from oss server
-  /// [fileKeys] list of object name from oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  /// [expireSeconds] is optional, default expired time are 60 seconds
-  @override
-  Future<Map<String, String>> getSignedUrls(
-    List<String> fileKeys, {
-    String? bucketName,
-    int expireSeconds = 60,
-  }) async {
-    return {
-      for (final String fileKey in fileKeys.toSet())
-        fileKey: await getSignedUrl(
-          fileKey,
-          bucketName: bucketName,
-          expireSeconds: expireSeconds,
-        )
-    };
-  }
-
-  /// list objects from oss server
-  /// [parameters] parameters for filter, refer to: https://help.aliyun.com/document_detail/31957.html
-  @override
-  Future<Response<dynamic>> listBuckets(
-    Map<String, dynamic> parameters, {
-    CancelToken? cancelToken,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final Auth auth = await getAuth();
-
-    final String url = "https://$endpoint";
-    final HttpRequest request = HttpRequest.get(url, parameters: parameters);
-
-    auth.sign(request, "", "");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onReceiveProgress: onReceiveProgress,
-    );
-  }
-
-  /// list objects from oss server
-  /// [parameters] parameters for filter, refer to: https://help.aliyun.com/document_detail/187544.html
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<Response<dynamic>> listObjects(
-    Map<String, dynamic> parameters, {
-    String? bucketName,
-    CancelToken? cancelToken,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint";
-    parameters["list-type"] = 2;
-    final HttpRequest request = HttpRequest.get(url, parameters: parameters);
-
-    auth.sign(request, bucket, "");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onReceiveProgress: onReceiveProgress,
-    );
-  }
-
-  /// get bucket info
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<Response<dynamic>> getBucketInfo({
-    String? bucketName,
-    CancelToken? cancelToken,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint?bucketInfo";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, "?bucketInfo");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onReceiveProgress: onReceiveProgress,
-    );
-  }
-
-  /// get bucket stat
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<Response<dynamic>> getBucketStat({
-    String? bucketName,
-    CancelToken? cancelToken,
-    ProgressCallback? onReceiveProgress,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint?stat";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, "?stat");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onReceiveProgress: onReceiveProgress,
-    );
-  }
-
-  /// download object(file) from oss server
-  /// [fileKey] is the object name from oss
-  /// [savePath] is where we save the object(file) that download from oss server
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<Response> downloadObject(
-    String fileKey,
+  Future<EmptyResponse> downloadObject(
+    String key,
     String savePath, {
     String? bucketName,
     CancelToken? cancelToken,
     ProgressCallback? onReceiveProgress,
   }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, fileKey);
-
-    return await _dio.download(
-      request.url,
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.get('https://$bucket.$endpoint/$key');
+    auth.sign(req, bucket, key);
+    return _http.download(
+      req.url,
       savePath,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: Options(headers: request.headers),
       onReceiveProgress: onReceiveProgress,
     );
   }
 
-  /// upload object(file) to oss server
-  /// [fileData] is the binary data that will send to oss server
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
   @override
-  Future<Response<dynamic>> putObject(
-    List<int> fileData,
-    String fileKey, {
+  Future<DeleteObjectResult> deleteObject(
+    DeleteObjectRequest request, {
     CancelToken? cancelToken,
-    PutRequestOption? option,
   }) async {
-    final String bucket = option?.bucketName ?? bucketName;
-    final Auth auth = await getAuth();
-
-    final MultipartFile multipartFile = MultipartFile.fromBytes(
-      fileData,
-      filename: fileKey,
+    final bucket = _bucket(request.bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.delete(
+      'https://$bucket.$endpoint/${request.key}',
+      headers: {'content-type': HttpMixin.jsonContentType},
     );
-    final Callback? callback = option?.callback;
-
-    final Map<String, dynamic> internalHeaders = {
-      'content-type': contentType(fileKey),
-      'content-length': multipartFile.length,
-      'x-oss-forbid-overwrite': option.forbidOverride,
-      'x-oss-object-acl': option.acl,
-      'x-oss-storage-class': option.storage,
-    };
-    final Map<String, dynamic> externalHeaders = option?.headers ?? {};
-    final Map<String, dynamic> headers = {
-      ...internalHeaders,
-      if (callback != null) ...callback.toHeaders(),
-      ...externalHeaders,
-    };
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest.put(url, headers: headers);
-    auth.sign(request, bucket, fileKey);
-
-    return _dio.put(
-      request.url,
-      data: multipartFile.chunk(),
+    auth.sign(req, bucket, request.key);
+    final resp = await _http.delete(
+      req.url,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onSendProgress: option?.onSendProgress,
-      onReceiveProgress: option?.onReceiveProgress,
+    );
+    return DeleteObjectResult.fromResponse(request.key, resp.statusCode);
+  }
+
+  @override
+  Future<List<DeleteObjectResult>> deleteObjects(
+    DeleteObjectsRequest request, {
+    CancelToken? cancelToken,
+  }) async {
+    return Future.wait(
+      request.keys.map(
+        (k) => deleteObject(
+          DeleteObjectRequest(key: k, bucketName: request.bucketName),
+          cancelToken: cancelToken,
+        ),
+      ),
     );
   }
 
-  /// upload object(file) to oss server
-  /// [fileData] is the binary data that will send to oss server
-  /// [position] next position that append to, default value is 0.
+  // ==================== Signed URL Operations ====================
+
   @override
-  Future<Response<dynamic>> appendObject(
-    List<int> fileData,
-    String fileKey, {
-    CancelToken? cancelToken,
-    PutRequestOption? option,
-    int? position,
+  Future<String> getSignedUrl(
+    String key, {
+    String? bucketName,
+    int expireSeconds = 60,
+    Map<String, dynamic>? params,
   }) async {
-    final String bucket = option?.bucketName ?? bucketName;
-    final Auth auth = await getAuth();
-
-    final MultipartFile multipartFile = MultipartFile.fromBytes(
-      fileData,
-      filename: fileKey,
-    );
-
-    final Map<String, dynamic> internalHeaders = {
-      'content-type': contentType(fileKey),
-      'content-length': multipartFile.length,
-      'x-oss-object-acl': option.acl,
-      'x-oss-storage-class': option.storage,
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final expires = DateTime.now().secondsSinceEpoch() + expireSeconds;
+    final parameters = <String, dynamic>{
+      'OSSAccessKeyId': auth.accessKey,
+      'Expires': expires,
+      'Signature': auth.getSignature(expires, bucket, key, params: params),
+      'security-token': auth.encodedToken,
+      ...?params,
     };
-    final Map<String, dynamic> externalHeaders = option?.headers ?? {};
-    final Map<String, dynamic> headers = {
-      ...internalHeaders,
-      ...externalHeaders
-    };
-
-    final String url =
-        "https://$bucket.$endpoint/$fileKey?append&position=${position ?? 0}";
-    final HttpRequest request = HttpRequest.post(url, headers: headers);
-    auth.sign(request, bucket, "$fileKey?append&position=${position ?? 0}");
-
-    return _dio.post(
-      request.url,
-      data: multipartFile.chunk(),
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-      onSendProgress: option?.onSendProgress,
-      onReceiveProgress: option?.onReceiveProgress,
+    final req = HttpRequest.get(
+      'https://$bucket.$endpoint/$key',
+      parameters: parameters,
     );
+    return req.url;
   }
 
-  /// upload object(file) to oss server
-  /// [filepath] is the filepath of the File that will send to oss server
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
   @override
-  Future<Response<dynamic>> putObjectFile(
-    String filepath, {
-    PutRequestOption? option,
-    CancelToken? cancelToken,
-    String? fileKey,
+  Future<Map<String, String>> getSignedUrls(
+    List<String> keys, {
+    String? bucketName,
+    int expireSeconds = 60,
   }) async {
-    final String bucket = option?.bucketName ?? bucketName;
-    final String filename = fileKey ?? filepath.split('/').last;
-    final Auth auth = await getAuth();
-
-    final MultipartFile multipartFile = await MultipartFile.fromFile(
-      filepath,
-      filename: filename,
-    );
-
-    final Callback? callback = option?.callback;
-
-    final Map<String, dynamic> internalHeaders = {
-      'content-type': contentType(filename),
-      'content-length': multipartFile.length,
-      'x-oss-forbid-overwrite': option.forbidOverride,
-      'x-oss-object-acl': option.acl,
-      'x-oss-storage-class': option.storage,
-    };
-
-    final Map<String, dynamic> externalHeaders = option?.headers ?? {};
-    final Map<String, dynamic> headers = {
-      ...internalHeaders,
-      if (callback != null) ...callback.toHeaders(),
-      ...externalHeaders
-    };
-
-    final String url = "https://$bucket.$endpoint/$filename";
-    final HttpRequest request = HttpRequest.put(url, headers: headers);
-
-    auth.sign(request, bucket, filename);
-
-    return _dio.put(
-      request.url,
-      data: multipartFile.finalize(),
-      options: Options(headers: request.headers),
-      cancelToken: cancelToken,
-      onSendProgress: option?.onSendProgress,
-      onReceiveProgress: option?.onReceiveProgress,
-    );
-  }
-
-  /// upload object(files) to oss server
-  /// [assetEntities] is list of files need to be uploaded to oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<List<Response<dynamic>>> putObjectFiles(
-    List<AssetFileEntity> assetEntities, {
-    CancelToken? cancelToken,
-  }) async {
-    final uploads = assetEntities.map((fileEntity) {
-      return putObjectFile(
-        fileEntity.filepath,
-        fileKey: fileEntity.filename,
-        cancelToken: cancelToken,
-        option: fileEntity.option,
+    final result = <String, String>{};
+    for (final key in keys.toSet()) {
+      result[key] = await getSignedUrl(
+        key,
+        bucketName: bucketName,
+        expireSeconds: expireSeconds,
       );
-    }).toList();
-    return await Future.wait(uploads);
+    }
+    return result;
   }
 
-  /// upload object(files) to oss server
-  /// [assetEntities] is list of files need to be uploaded to oss
-  /// [bucketName] is optional, we use the default bucketName as we defined in Client
-  @override
-  Future<List<Response<dynamic>>> putObjects(
-    List<AssetEntity> assetEntities, {
-    CancelToken? cancelToken,
-  }) async {
-    final uploads = assetEntities.map((file) {
-      return putObject(
-        file.bytes,
-        file.filename,
-        cancelToken: cancelToken,
-        option: file.option,
-      );
-    }).toList();
-    return await Future.wait(uploads);
-  }
+  // ==================== Bucket Operations ====================
 
-  /// get object metadata
   @override
-  Future<Response<dynamic>> getObjectMeta(
-    String fileKey, {
-    CancelToken? cancelToken,
+  Future<ListObjectsResult> listObjects(
+    ListObjectsRequest request, {
     String? bucketName,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest(url, 'HEAD', {}, {});
-    auth.sign(request, bucket, fileKey);
-
-    return _dio.head(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-    );
-  }
-
-  /// copy object
-  @override
-  Future<Response<dynamic>> copyObject(
-    CopyRequestOption option, {
     CancelToken? cancelToken,
+    ProgressCallback? onReceiveProgress,
   }) async {
-    final String sourceBucketName = option.sourceBucketName ?? bucketName;
-    final String sourceFileKey = option.sourceFileKey;
-    final String copySource = "/$sourceBucketName/$sourceFileKey";
-
-    final String targetBucketName = option.targetBucketName ?? sourceBucketName;
-    final String targetFileKey = option.targetFileKey ?? sourceFileKey;
-
-    final Map<String, dynamic> internalHeaders = {
-      'content-type': contentType(targetFileKey),
-      'x-oss-copy-source': copySource,
-      'x-oss-forbid-overwrite': option.forbidOverride,
-      'x-oss-object-acl': option.acl,
-      'x-oss-storage-class': option.storage,
-    };
-
-    final Map<String, dynamic> externalHeaders = option.headers ?? {};
-    final Map<String, dynamic> headers = {
-      ...internalHeaders,
-      ...externalHeaders
-    };
-
-    final Auth auth = await getAuth();
-
-    final String url = "https://$targetBucketName.$endpoint/$targetFileKey";
-    final HttpRequest request = HttpRequest.put(url, headers: headers);
-    auth.sign(request, targetBucketName, targetFileKey);
-
-    return _dio.put(
-      request.url,
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final params = {...request.toParameters(), 'list-type': 2};
+    final req = HttpRequest.get('https://$bucket.$endpoint', parameters: params);
+    auth.sign(req, bucket, '');
+    final resp = await _http.get(
+      req.url,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: Options(headers: request.headers),
+      onReceiveProgress: onReceiveProgress,
     );
+    return ListObjectsResult.fromXml(XmlDocument.parse(resp.data));
   }
 
-  /// get all supported regions
   @override
-  Future<Response<dynamic>> getAllRegions({
+  Future<ListBucketsResult> listBuckets(
+    ListBucketsRequest request, {
     CancelToken? cancelToken,
+    ProgressCallback? onReceiveProgress,
   }) async {
-    final Auth auth = await getAuth();
-
-    final String url = "https://$endpoint/?regions";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, "", "");
-
-    return _dio.get(
-      request.url,
+    final auth = await getAuth();
+    final req = HttpRequest.get('https://$endpoint', parameters: request.toParameters());
+    auth.sign(req, '', '');
+    final resp = await _http.get(
+      req.url,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: Options(headers: request.headers),
+      onReceiveProgress: onReceiveProgress,
     );
+    return ListBucketsResult.fromXml(XmlDocument.parse(resp.data));
   }
 
-  /// get bucket acl
   @override
-  Future<Response<dynamic>> getBucketAcl({
+  Future<BucketInfo> getBucketInfo({String? bucketName, CancelToken? cancelToken}) async {
+    final bucket = _bucket(bucketName);
+    final resp = await _signedGet(bucket, '?bucketInfo', cancelToken: cancelToken);
+    return BucketInfo.fromXml(XmlDocument.parse(resp.data));
+  }
+
+  @override
+  Future<BucketStat> getBucketStat({String? bucketName, CancelToken? cancelToken}) async {
+    final bucket = _bucket(bucketName);
+    final resp = await _signedGet(bucket, '?stat', cancelToken: cancelToken);
+    return BucketStat.fromXml(XmlDocument.parse(resp.data));
+  }
+
+  @override
+  Future<BucketAcl> getBucketAcl({String? bucketName, CancelToken? cancelToken}) async {
+    final bucket = _bucket(bucketName);
+    final resp = await _signedGet(bucket, '?acl', cancelToken: cancelToken);
+    return BucketAcl.fromXml(XmlDocument.parse(resp.data));
+  }
+
+  @override
+  Future<void> putBucketAcl(
+    AclMode aclMode, {
     String? bucketName,
     CancelToken? cancelToken,
   }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/?acl";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, "?acl");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.put(
+      'https://$bucket.$endpoint/?acl',
+      headers: {
+        'content-type': HttpMixin.jsonContentType,
+        'x-oss-acl': aclMode.content,
+      },
     );
+    auth.sign(req, bucket, '?acl');
+    await _http.put(req.url, headers: req.headers, cancelToken: cancelToken);
   }
 
-  /// get bucket policy
   @override
-  Future<Response<dynamic>> getBucketPolicy({
-    String? bucketName,
-    CancelToken? cancelToken,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/?policy";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, bucket, "?policy");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-    );
+  Future<String?> getBucketPolicy({String? bucketName, CancelToken? cancelToken}) async {
+    final bucket = _bucket(bucketName);
+    final resp = await _signedGet(bucket, '?policy', cancelToken: cancelToken);
+    return resp.data.isNotEmpty ? resp.data : null;
   }
 
-  /// delete bucket policy
   @override
-  Future<Response<dynamic>> deleteBucketPolicy({
-    String? bucketName,
-    CancelToken? cancelToken,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/?policy";
-    final HttpRequest request = HttpRequest.delete(url, headers: {
-      'content-type': Headers.jsonContentType,
-    });
-    auth.sign(request, bucket, "?policy");
-
-    return _dio.delete(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-    );
-  }
-
-  /// put bucket policy
-  @override
-  Future<Response<dynamic>> putBucketPolicy(
+  Future<void> putBucketPolicy(
     Map<String, dynamic> policy, {
     String? bucketName,
     CancelToken? cancelToken,
   }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/?policy";
-    final HttpRequest request = HttpRequest.put(url, headers: {
-      'content-type': Headers.jsonContentType,
-    });
-    auth.sign(request, bucket, "?policy");
-
-    return _dio.put(
-      data: policy,
-      request.url,
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.put(
+      'https://$bucket.$endpoint/?policy',
+      headers: {'content-type': HttpMixin.jsonContentType},
+    );
+    auth.sign(req, bucket, '?policy');
+    final body = utf8.encode(jsonEncode(policy));
+    await _http.put(
+      req.url,
+      body: Stream.fromIterable([body]),
+      contentLength: body.length,
+      headers: req.headers,
       cancelToken: cancelToken,
-      options: Options(headers: request.headers),
     );
   }
 
-  /// put bucket acl
   @override
-  Future<Response<dynamic>> putBucketAcl(
-    AclMode aciMode, {
-    CancelToken? cancelToken,
-    String? bucketName,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/?acl";
-    final HttpRequest request = HttpRequest.put(url, headers: {
-      'content-type': Headers.jsonContentType,
-      'x-oss-acl': aciMode.content,
-    });
-    auth.sign(request, bucket, "?acl");
-
-    return _dio.put(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
+  Future<void> deleteBucketPolicy({String? bucketName, CancelToken? cancelToken}) async {
+    final bucket = _bucket(bucketName);
+    final auth = await getAuth();
+    final req = HttpRequest.delete(
+      'https://$bucket.$endpoint/?policy',
+      headers: {'content-type': HttpMixin.jsonContentType},
     );
+    auth.sign(req, bucket, '?policy');
+    await _http.delete(req.url, headers: req.headers, cancelToken: cancelToken);
   }
 
-  /// get all supported regions
+  // ==================== Region Operations ====================
+
   @override
-  Future<Response<dynamic>> getRegion(
-    String region, {
-    CancelToken? cancelToken,
-  }) async {
-    final Auth auth = await getAuth();
-
-    final String url = "https://$endpoint/?regions=$region";
-    final HttpRequest request = HttpRequest.get(url);
-    auth.sign(request, "", "");
-
-    return _dio.get(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-    );
+  Future<RegionsResult> getAllRegions({CancelToken? cancelToken}) async {
+    final auth = await getAuth();
+    final req = HttpRequest.get('https://$endpoint/?regions');
+    auth.sign(req, '', '');
+    final resp = await _http.get(req.url, headers: req.headers, cancelToken: cancelToken);
+    return RegionsResult.fromXml(XmlDocument.parse(resp.data));
   }
 
-  /// delete object from oss
   @override
-  Future<Response<dynamic>> deleteObject(
-    String fileKey, {
-    String? bucketName,
-    CancelToken? cancelToken,
-  }) async {
-    final String bucket = bucketName ?? this.bucketName;
-    final Auth auth = await getAuth();
-
-    final String url = "https://$bucket.$endpoint/$fileKey";
-    final HttpRequest request = HttpRequest.delete(url, headers: {
-      'content-type': Headers.jsonContentType,
-    });
-    auth.sign(request, bucket, fileKey);
-
-    return _dio.delete(
-      request.url,
-      cancelToken: cancelToken,
-      options: Options(headers: request.headers),
-    );
-  }
-
-  /// delete objects from oss
-  @override
-  Future<List<Response<dynamic>>> deleteObjects(
-    List<String> keys, {
-    String? bucketName,
-    CancelToken? cancelToken,
-  }) async {
-    final deletes = keys.map((fileKey) {
-      return deleteObject(
-        fileKey,
-        bucketName: bucketName,
-        cancelToken: cancelToken,
-      );
-    }).toList();
-
-    return await Future.wait(deletes);
+  Future<RegionsResult> getRegion(String region, {CancelToken? cancelToken}) async {
+    final auth = await getAuth();
+    final req = HttpRequest.get('https://$endpoint/?regions=$region');
+    auth.sign(req, '', '');
+    final resp = await _http.get(req.url, headers: req.headers, cancelToken: cancelToken);
+    return RegionsResult.fromXml(XmlDocument.parse(resp.data));
   }
 }

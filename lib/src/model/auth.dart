@@ -1,7 +1,12 @@
-import 'package:flutter_oss_aliyun/src/extension/date_extension.dart';
-import 'package:flutter_oss_aliyun/src/model/request.dart';
-import 'package:flutter_oss_aliyun/src/model/signed_parameters.dart';
-import 'package:flutter_oss_aliyun/src/util/encrypt.dart';
+// 阿里云 OSS 认证模型
+// 基于阿里云 STS（Security Token Service）临时凭证
+// 文档: https://help.aliyun.com/zh/oss/developer-reference/authorize-access-1
+// STS 文档: https://help.aliyun.com/zh/ram/user-guide/overview-of-sts
+
+import 'package:flutter_alioss/src/extension/date_extension.dart';
+import 'package:flutter_alioss/src/model/request.dart';
+import 'package:flutter_alioss/src/model/signed_parameters.dart';
+import 'package:flutter_alioss/src/util/encrypt.dart';
 
 class Auth {
   const Auth({

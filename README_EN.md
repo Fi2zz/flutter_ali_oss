@@ -1,457 +1,265 @@
 Language: [中文简体](README.md) | [English](README_EN.md)
 
-# flutter_oss_aliyun
+# flutter_alioss
 
-Oss aliyun plugin for flutter. Use sts policy to authenticate the user.
+A **strongly-typed**, **dio-free** Flutter SDK for Alibaba Cloud Object Storage Service (OSS).
 
-**flutter pub**: [https://pub.dev/packages/flutter_oss_aliyun](https://pub.dev/packages/flutter_oss_aliyun)
+## About Alibaba Cloud OSS
 
-**oss sts document**: [https://help.aliyun.com/document_detail/100624.html](https://help.aliyun.com/document_detail/100624.html)
+**Alibaba Cloud Object Storage Service (OSS)** is a massive, secure, low-cost, and highly reliable cloud storage service provided by Alibaba Cloud. Its data design durability is no less than 99.9999999999% (12 nines), and service availability (or business continuity) is no less than 99.995%.
 
-## 🐱&nbsp; Init Client
+- **Official Website**: https://www.aliyun.com/product/oss
+- **Developer Reference**: https://help.aliyun.com/zh/oss/developer-reference/overview
+- **API Operations by Function**: https://help.aliyun.com/zh/oss/developer-reference/list-of-operations-by-function
+- **ListObjectsV2 API**: https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2
+- **PutObject API**: https://help.aliyun.com/zh/oss/developer-reference/putobject
+- **GetObject API**: https://help.aliyun.com/zh/oss/developer-reference/getobject
 
-First, add `flutter_oss_aliyun` as a dependency in your `pubspec.yaml` file.
+> This SDK is built on top of the Alibaba Cloud OSS REST API. All operations follow the official Alibaba Cloud API specifications.
+> Copyright: Alibaba Cloud
+
+---
+
+## Why fork?
+
+The original package `flutter_oss_aliyun` had two core problems:
+
+1. **All APIs returned `dynamic`** — you had to guess field names and types, and the compiler couldn't catch typos
+2. **Strongly coupled to dio** — introduced unnecessary dependencies and prevented custom HTTP layers
+
+This rewrite solves both:
+- **Strongly-typed results** — every API has a dedicated Result class with full IDE autocomplete
+- **Zero dio dependency** — uses `dart:io` HttpClient directly, zero external HTTP dependencies
+- **Simplified init** — just provide an `authenticator` callback; no `stsUrl`, no `Dio` injection
+- **Type-safe request objects** — `ListObjectsRequest(maxKeys: 10, prefix: "images/")` instead of raw `Map<String, dynamic>`
+
+---
+
+## Quick Start
+
+### 1. Add dependency
 
 ```yaml
 dependencies:
-  flutter_oss_aliyun: ^6.4.2
+  flutter_alioss: ^1.0.0
 ```
 
-Don't forget to `flutter pub get`.
-
-### **Init the client, we provide two ways to do it**
-
-#### 1. `Use sts server api`: provide the sts url from our backend server
+### 2. Initialize the client
 
 ```dart
+import 'package:flutter_alioss/flutter_alioss.dart';
+
 Client.init(
-    stsUrl: "server url get sts token",
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucket name",
-);
-```
-
-This sts url api at least return the data:
-
-```json
-{
-  "AccessKeyId": "AccessKeyId",
-  "AccessKeySecret": "AccessKeySecret",
-  "SecurityToken": "SecurityToken",
-  "Expiration": "2022-03-22T11:33:06Z"
-}
-```
-
-#### 2. use authGetter
-
-```dart
-Client.init(
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucketName",
-    authGetter: _authGetter
-);
-
-Auth _authGetter() {
-  return Auth(
-      accessKey: "accessKey",
-      accessSecret: 'accessSecret',
-      expire: '2023-02-23T14:02:46Z',
-      secureToken: 'token',
-  );
-}
-```
-
-### Integrate with get_it
-`injectable`: https://pub.dev/packages/injectable
-
-```dart
-@module
-abstract class OssProvider {
-  @singleton
-  Client client() {
-    return Client.init(
-      stsUrl: Env.stsUrl,
-      ossEndpoint: Env.endpointUrl,
-      bucketName: Env.bucketName,
+  ossEndpoint: 'oss-cn-hangzhou.aliyuncs.com',
+  bucketName: 'my-bucket',
+  authenticator: () async {
+    // Fetch STS credentials from your backend server
+    final response = await http.get(Uri.parse('https://your-server.com/sts'));
+    final json = jsonDecode(response.body);
+    return Auth(
+      accessKey:    json['AccessKeyId'],
+      accessSecret: json['AccessKeySecret'],
+      secureToken:  json['SecurityToken'],
+      expire:       json['Expiration'],
     );
-  }
+  },
+);
+```
+
+`authenticator` is called automatically whenever credentials expire.
+
+### 3. Use the typed API
+
+```dart
+final client = Client();
+
+// Upload
+final PutObjectResult result = await client.putObjectWithRequest(
+  PutObjectRequest(
+    key: 'avatars/user-42.jpg',
+    data: imageBytes,
+    aclMode: AclMode.private,
+    storageType: StorageType.standard,
+  ),
+);
+print('Uploaded, ETag: ${result.eTag}');
+
+// List objects
+final ListObjectsResult list = await client.listObjectsWithRequest(
+  const ListObjectsRequest(maxKeys: 20, prefix: 'avatars/'),
+);
+for (final obj in list.objects) {
+  print('${obj.key} - ${obj.size} bytes - ${obj.lastModified}');
+}
+
+// Get signed URL (valid for 1 hour)
+final String url = await client.getSignedUrl(
+  'avatars/user-42.jpg',
+  expireSeconds: 3600,
+);
+
+// Download
+await client.downloadObject(
+  'avatars/user-42.jpg',
+  '/tmp/user-42.jpg',
+  onReceiveProgress: (received, total) =>
+    print('${(received / total * 100).toStringAsFixed(0)}%'),
+);
+
+// Delete
+final DeleteObjectResult del = await client.deleteObject('avatars/user-42.jpg');
+assert(del.deleted);
+```
+
+---
+
+## Typed Request Classes
+
+| Operation | Legacy (still works) | Typed (recommended) |
+|-----------|---------------------|---------------------|
+| List objects | `listObjects({"max-keys": 10})` | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))` |
+| Put object | `putObject(bytes, "key", option: ...)` | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))` |
+| Copy object | `copyObject(CopyRequestOption(...))` | `copyObjectWithRequest(CopyObjectRequest(...))` |
+| Append object | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))` |
+| Put file | `putObjectFile("/path", option: ...)` | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+
+---
+
+## Typed Result Classes
+
+| API Method | Return Type | Key Fields |
+|------------|-------------|------------|
+| `putObject` / `putObjectWithRequest` | `PutObjectResult` | `eTag`, `statusCode`, `versionId` |
+| `copyObject` / `copyObjectWithRequest` | `CopyObjectResult` | `eTag`, `lastModified` |
+| `appendObject` / `appendObjectWithRequest` | `AppendObjectResult` | `nextPosition`, `eTag` |
+| `deleteObject` | `DeleteObjectResult` | `deleted`, `statusCode`, `key` |
+| `getObjectMeta` | `ObjectMeta` | `contentLength`, `contentType`, `lastModified`, `eTag` |
+| `listObjects` / `listObjectsWithRequest` | `ListObjectsResult` | `objects: List<OSSObject>`, `isTruncated`, `nextContinuationToken` |
+| `listBuckets` / `listBucketsWithRequest` | `ListBucketsResult` | `buckets: List<Bucket>`, `owner` |
+| `getBucketInfo` | `BucketInfo` | `name`, `location`, `creationDate`, `acl`, `storageClass` |
+| `getBucketStat` | `BucketStat` | `storage`, `objectCount`, `standardStorage`, `archiveStorage` |
+| `getBucketAcl` | `BucketAcl` | `grant` (e.g. `"private"`, `"public-read"`) |
+| `getAllRegions` / `getRegion` | `RegionsResult` | `regions: List<Region>` |
+
+---
+
+## Object Model
+
+When listing objects, each item is a fully-typed `OSSObject`:
+
+```dart
+for (final object in result.objects) {
+  object.key;           // String
+  object.size;          // int (bytes)
+  object.lastModified;  // DateTime
+  object.eTag;          // String
+  object.storageClass;  // String ("STANDARD", "IA", "ARCHIVE", ...)
+  object.type;          // String? ("Normal", "Multipart", "Appendable")
+  object.owner?.id;     // String?
 }
 ```
 
-**`customize the dio`**
+---
 
-you can pass the dio in `init` method to use your own Dio.
+## OSS Storage Classes
 
-```dart
-Client.init(
-    stsUrl: "server url get sts token",
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucket name",
-    dio: Dio(BaseOptions(connectTimeout: 9000)),
-);
-```
+Reference: [Storage Class Overview](https://help.aliyun.com/zh/oss/user-guide/overview-of-storage-classes)
 
-## 🎨&nbsp;Usage
+| Enum Value | OSS Value | Use Case |
+|------------|-----------|----------|
+| `StorageType.standard` | `"STANDARD"` | Frequently accessed images, videos, files |
+| `StorageType.ia` | `"IA"` | Backups accessed 1-2 times per month |
+| `StorageType.archive` | `"ARCHIVE"` | Long-term archive, requires thawing |
+| `StorageType.coldArchive` | `"COLDARCHIVE"` | Ultra-long-term cold archive |
 
-- [put the object to oss with progress callback](#put-the-object-to-oss-with-progress-callback)
-- [append object](#append-object)
-- [copy object](#copy-object)
-- [cancel file upload](#cancel-put-object)
-- [batch put the object to oss](#batch-put-the-object-to-oss)
-- [update object from local file](#update-object-from-local-file)
-- [batch upload local files to oss](#batch-upload-local-files-to-oss)
-- [get the object from oss with progress callback](#get-the-object-from-oss-with-progress-callback)
-- [does the object existed](#does-the-object-existed)
-- [download the object from oss with progress callback](#download-the-object-from-oss-with-progress-callback)
-- [delete the object from oss](#delete-the-object-from-oss)
-- [batch delete the object from oss](#batch-delete-the-object-from-oss)
-- [get signed url that can be accessed in browser directly](#get-signed-url-that-can-be-accessed-in-browser-directly)
-- [get multiple signed urls](#get-multiple-signed-urls)
-- [list buckets](#list-buckets)
-- [list objects](#list-objects)
-- [get bucket info](#get-bucket-info)
-- [get objects counts and bucket details](#get-objects-counts-and-bucket-details)
-- [get object metadata](#get-object-metadata)
-- [query regions](#query-regions)
-- [bucket acl](#bucket-acl)
-- [bucket policy](#bucket-policy)
+---
 
-### **put the object to oss with progress callback**
+## OSS ACL Permissions
 
-callback reference: <https://help.aliyun.com/document_detail/31989.htm?spm=a2c4g.11186623.0.0.73a830ffn45LMY#reference-zkm-311-hgb>
+Reference: [Access Control (ACL)](https://help.aliyun.com/zh/oss/user-guide/acls)
 
-```dart
-final bytes = "file bytes".codeUnits;
+| Enum Value | OSS Value | Description |
+|------------|-----------|-------------|
+| `AclMode.private` | `"private"` | Only owner can read/write |
+| `AclMode.publicRead` | `"public-read"` | Anyone can read, only owner can write |
+| `AclMode.publicReadWrite` | `"public-read-write"` | Anyone can read/write (not recommended) |
+| `AclMode.inherited` | `"default"` | Inherit Bucket ACL |
 
-await Client().putObject(
-  bytes,
-  "test.txt",
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      print("send: count = $count, and total = $total");
-    },
-    onReceiveProgress: (count, total) {
-      print("receive: count = $count, and total = $total");
-    },
-    override: false,
-    aclModel: AclMode.publicRead,
-    storageType: StorageType.ia,
-    headers: {"cache-control": "no-cache"},
-    callback: Callback(
-      callbackUrl: "callback url",
-      callbackBody: "{\"mimeType\":\${mimeType}, \"filepath\":\${object},\"size\":\${size},\"bucket\":\${bucket},\"phone\":\${x:phone}}",
-      callbackVar: {"x:phone": "android"},
-      calbackBodyType: CalbackBodyType.json,
-    ),    
-  ),
-);
-```
+---
 
-**PutRequestOption, fields are optional**
-| Filed       | Default value | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| override    | true          | true: Allow override the same name Object<br>false: Not allow override the same name Object                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| aclModel    | inherited     | 1. publicWrite: Anyone (including anonymous visitors) can read and write about the Object<br>2. publicRead: Only the owner of the Object can write to the Object, and anyone (including anonymous visitors) can read the Object<br>3. private: Only the owner of the Object can read and write to the Object, and no one else can access the Object<br>4. inherited: This Object follows the read and write permission of Bucket, which is what is Bucket and Object is what permission <br>reference: <https://help.aliyun.com/document_detail/100676.htm?spm=a2c4g.11186623.0.0.56637952SnxOWV#concept-blw-yqm-2gb> |
-| storageType | Standard      | reference: <https://help.aliyun.com/document_detail/51374.htm?spm=a2c4g.11186623.0.0.56632b55htpEQX#concept-fcn-3xt-tdb>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+## API Reference Table
 
-### <span id="append-object">**append object**</span>
+| SDK Method | Alibaba Cloud OSS API | Documentation |
+|------------|----------------------|---------------|
+| `putObject` / `putObjectWithRequest` | PutObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/putobject) |
+| `getObject` / `getObjectWithRequest` | GetObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
+| `getObjectMeta` | GetObjectMeta | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta) |
+| `copyObject` / `copyObjectWithRequest` | CopyObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/copyobject) |
+| `appendObject` / `appendObjectWithRequest` | AppendObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/appendobject) |
+| `deleteObject` | DeleteObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/deleteobject) |
+| `listObjects` / `listObjectsWithRequest` | ListObjectsV2 | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2) |
+| `listBuckets` / `listBucketsWithRequest` | ListBuckets | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listbuckets) |
+| `getBucketInfo` | GetBucketInfo | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo) |
+| `getBucketStat` | GetBucketStat | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat) |
+| `getBucketAcl` / `putBucketAcl` | GetBucketAcl / PutBucketAcl | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl) |
+| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy | [Docs](https://help.aliyun.com/zh/oss/user-guide/bucket-policy) |
+| `getSignedUrl` | Signed URL | [Docs](https://help.aliyun.com/zh/oss/developer-reference/signatures) |
+| `downloadObject` | GetObject (stream download) | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
+| `getAllRegions` / `getRegion` | GetRegion | [Docs](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints) |
+
+---
+
+## Cancellation
+
+All async operations accept an optional `CancelToken`:
 
 ```dart
-final Response<dynamic> resp = await Client().appendObject(
-  Uint8List.fromList(utf8.encode("Hello World")),
-  "test_append.txt",
+final token = CancelToken();
+
+client.putObjectWithRequest(
+  PutObjectRequest(key: 'big.zip', data: bytes),
+  cancelToken: token,
 );
 
-final Response<dynamic> resp2 = await Client().appendObject(
-  position: int.parse(resp.headers["x-oss-next-append-position"]?[0]),
-  Uint8List.fromList(utf8.encode(", Fluter.")),
-  "test_append.txt",
-);
+// Cancel later
+token.cancel('User cancelled');  // throws CancelException
 ```
 
-### <span id="copy-object">**copy object**</span>
+---
+
+## Error Handling
+
+The SDK throws `OssException` on HTTP errors:
 
 ```dart
-final Response<dynamic> resp = await Client().copyObject(
-  const CopyRequestOption(
-    sourceFileKey: 'test.csv',
-    targetFileKey: "test_copy.csv",
-    targetBucketName: "bucket_2"
-  ),
-);
+try {
+  await client.getObjectMeta('nonexistent.txt');
+} on OssException catch (e) {
+  print('${e.statusCode}: ${e.message}');     // 404: NoSuchKey
+  print('Request ID: ${e.requestId}');         // For Alibaba Cloud tech support
+  print('Code: ${e.code}');                    // NoSuchKey
+}
 ```
 
-### <span id="cancel-put-object">**cancel file upload**</span>
+Common OSS error codes: [Error Responses](https://help.aliyun.com/zh/oss/developer-reference/error-responses)
 
-```dart
-final CancelToken cancelToken = CancelToken();
-final bytes = ("long long bytes" * 1000).codeUnits;
+---
 
-Client().putObject(
-  Uint8List.fromList(utf8.encode(string)),
-  "cancel_token_test.txt",
-  cancelToken: cancelToken,
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      if (kDebugMode) {
-        print("send: count = $count, and total = $total");
-      }
-      if (count > 56) {
-        cancelToken.cancel("cancel the uploading.");
-      }
-    },
-  ),
-).then((response) {
-  // success
-  print("upload success = ${response.statusCode}");
-}).catchError((err) {
-  if (CancelToken.isCancel(err)) {
-    print("error message = ${err.message}");
-  } else {
-    // handle other errors
-  }
-});
-```
+## Breaking Changes from `flutter_oss_aliyun`
 
-### **batch put the object to oss**
+| Before | After |
+|--------|-------|
+| `Client.init(stsUrl: ..., authGetter: ...)` | `Client.init(authenticator: ...)` (required) |
+| `Client.init(dio: myDio)` | Removed — dio no longer used |
+| `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)` |
+| `Future<Response<dynamic>> putObject(...)` | `Future<PutObjectResult> putObject(...)` |
+| `CancelToken` from `package:dio` | `CancelToken` from `package:flutter_alioss` |
+| `Response<dynamic>` from dio | `BytesResponse`, `StringResponse`, `EmptyResponse` |
 
-```dart
-await Client().putObjects([
-  AssetEntity(
-    filename: "filename1.txt",
-    bytes: "files1".codeUnits,
-    option: PutRequestOption(
-      onSendProgress: (count, total) {
-        print("send: count = $count, and total = $total");
-      },
-      onReceiveProgress: (count, total) {
-        print("receive: count = $count, and total = $total");
-      },
-      aclModel: AclMode.private,
-    ),
-  ),
-  AssetEntity(filename: "filename2.txt", bytes: "files2".codeUnits),
-]);
-```
+---
 
-### **update object from local file**
+## License
 
-```dart
-final Response<dynamic> resp = await Client().putObjectFile(
-  "/Users/aaa.pdf",
-  fileKey: "aaa.png",
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      print("send: count = $count, and total = $total");
-    },
-    onReceiveProgress: (count, total) {
-      print("receive: count = $count, and total = $total");
-    },
-    aclModel: AclMode.private,
-    callback: Callback(
-      callbackUrl: callbackUrl,
-      callbackBody:
-          "{\"mimeType\":\${mimeType}, \"filepath\":\${object},\"size\":\${size},\"bucket\":\${bucket},\"phone\":\${x:phone}}",
-      callbackVar: {"x:phone": "android"},
-      calbackBodyType: CalbackBodyType.json,
-    ),
-  ),
-);
-```
+This SDK is built on the Alibaba Cloud OSS REST API. Alibaba Cloud and Alibaba Cloud OSS trademarks and documentation are copyrighted by [Alibaba Group](https://www.alibabagroup.com/).
 
-### **batch upload local files to oss**
-
-```dart
-final List<Response<dynamic>> resp = await Client().putObjectFiles(
-  [
-    AssetFileEntity(
-      filepath: "//Users/private.txt",
-      option: PutRequestOption(
-        onSendProgress: (count, total) {
-          print("send: count = $count, and total = $total");
-        },
-        onReceiveProgress: (count, total) {
-          print("receive: count = $count, and total = $total");
-        },
-        override: false,
-        aclModel: AclMode.private,
-      ),
-    ),
-    AssetFileEntity(
-      filepath: "//Users/splash.png",
-      filename: "aaa.png",
-      option: PutRequestOption(
-        onSendProgress: (count, total) {
-          print("send: count = $count, and total = $total");
-        },
-        onReceiveProgress: (count, total) {
-          print("receive: count = $count, and total = $total");
-        },
-        override: true,
-      ),
-    ),
-  ],
-);
-```
-
-### **get the object from oss with progress callback**
-
-```dart
-await Client().getObject(
-  "test.txt",
-  onReceiveProgress: (count, total) {
-    debugPrint("received = $count, total = $total");
-  },
-);
-```
-
-
-### **does the object existed**
-```dart
-final bool isExisted = await Client().doesObjectExist(
-    "aaa.jpg",
-);
-```
-
-### **download the object from oss with progress callback**
-
-```dart
-await Client().downloadObject(
-  "test.txt", 
-  "./example/test.txt",
-  onReceiveProgress: (count, total) {
-    debugPrint("received = $count, total = $total");
-  },
-);
-```
-
-### **delete the object from oss**
-
-```dart
-await Client().deleteObject("test.txt");
-```
-
-### **batch delete the object from oss**
-
-```dart
-await Client().deleteObjects(["filename1.txt", "filename2.txt"]);
-```
-
-### **get signed url that can be accessed in browser directly**
-
-This is `not safe` due to the url include the security-token information even it will expire in short time. Use it carefully!!!
-
-```dart
-final String url = await Client().getSignedUrl(
-  "test.jpg",
-  params: {"x-oss-process": "image/resize,w_10/quality,q_90"},
-);
-```
-
-### **get multiple signed urls**
-
-This is `not safe` due to the url include the security-token information even it will expire in short time. Use it carefully!!!
-
-```dart
-final Map<String, String> result = await Client().getSignedUrls(["test.txt", "filename1.txt"]);
-```
-
-### **list buckets**
-
-list all owned buckets, refer to: <https://help.aliyun.com/document_detail/31957.html>
-
-```dart
-final Response<dynamic> resp = await Client().listBuckets({"max-keys": 2});
-```
-
-### **list objects**
-
-List the information of all files (Object) in the storage space (Bucket). The parameters and response, refer to: <https://help.aliyun.com/document_detail/187544.html>
-
-```dart
-final Response<dynamic> resp = await Client().listFiles({});
-```
-
-### **get bucket info**
-
-View bucket information, The response refer to: <https://help.aliyun.com/document_detail/31968.html>
-
-```dart
-final Response<dynamic> resp = await Client().getBucketInfo();
-```
-
-### **get objects counts and bucket details**
-
-Gets the storage capacity of the specified storage space (Bucket) and the number of files (Object), The response refer to: <https://help.aliyun.com/document_detail/426056.html>
-
-```dart
-final Response<dynamic> resp = await Client().getBucketStat();
-```
-
-### **get object metadata**
-
-```dart
-final Response<dynamic> resp = await Client().getObjectMeta("huhx.csv");
-```
-
-### **query regions**
-
-- find all
-
-```dart
-final Response<dynamic> resp = await Client().getAllRegions();
-```
-
-- find by name
-
-```dart
-final Response<dynamic> resp = await Client().getRegion("oss-ap-northeast-1");
-```
-
-### **bucket acl**
-
-- query
-
-```dart
-final Response<dynamic> resp = await Client().getBucketAcl(
-  bucketName: "bucket-name",
-);
-```
-
-- add or update
-
-```dart
-final Response<dynamic> resp = await Client().putBucketAcl(
-  AciMode.publicRead, 
-  bucketName: "bucket-name",
-);
-```
-
-### **bucket policy**
-
-- query
-
-```dart
-final Response<dynamic> resp = await Client().getBucketPolicy(
-  bucketName: "bucket-name",
-);
-```
-
-- update
-
-```dart
-final Response<dynamic> resp = await Client().putBucketPolicy(
-  {}, 
-  bucketName: "bucket-name",
-);
-```
-
-- delete
-
-```dart
-final Response<dynamic> resp = await Client().deleteBucketPolicy(
-  bucketName: "bucket-name",
-);
-```
-
-## Drop a ⭐ if it is help to you
+This project is licensed under the MIT License. See [LICENSE](LICENSE) file.

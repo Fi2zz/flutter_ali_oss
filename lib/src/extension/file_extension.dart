@@ -1,18 +1,17 @@
 import 'dart:typed_data';
 
-import 'package:async/async.dart';
-import 'package:dio/dio.dart';
+import '../util/multipart_file.dart';
 
 extension MultipartFileExtension on MultipartFile {
-  /// chunk multipartFile to stream, chunk size is: 64KB
+  /// Split the file stream into 64 KB chunks for streaming upload.
   Stream<List<int>> chunk() async* {
-    final reader = ChunkedStreamReader<int>(finalize());
-    while (true) {
-      final Uint8List data = await reader.readBytes(64 * 1024);
-      if (data.isEmpty) {
-        break;
-      }
-      yield data;
+    var offset = 0;
+    final bytes = await readAsBytes();
+    const chunkSize = 64 * 1024;
+    while (offset < bytes.length) {
+      final end = (offset + chunkSize < bytes.length) ? offset + chunkSize : bytes.length;
+      yield Uint8List.fromList(bytes.sublist(offset, end));
+      offset = end;
     }
   }
 }

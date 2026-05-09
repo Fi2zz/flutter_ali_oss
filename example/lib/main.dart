@@ -2,7 +2,7 @@
 import 'package:flutter/foundation.dart';
 // ignore: depend_on_referenced_packages
 import 'package:flutter/material.dart';
-import 'package:flutter_oss_aliyun/flutter_oss_aliyun.dart';
+import 'package:flutter_alioss/flutter_alioss.dart';
 
 void main() {
   runApp(
@@ -21,125 +21,154 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  String _status = "Ready";
+
   @override
   void initState() {
     super.initState();
     Client.init(
-      stsUrl: "server sts url",
       ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-      bucketName: "bucket name",
+      bucketName: "bucket-name",
+      authenticator: () => const Auth(
+        accessKey: "your-access-key",
+        accessSecret: "your-access-secret",
+        secureToken: "your-security-token",
+        expire: "2025-12-31T23:59:59Z",
+      ),
     );
+  }
+
+  void _updateStatus(String message) {
+    setState(() => _status = message);
+    debugPrint(message);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Flutter aliyun oss example"),
+        title: const Text("flutter_alioss example"),
       ),
       body: Container(
         alignment: Alignment.center,
-        child: Column(
-          children: [
-            TextButton(
-              onPressed: () async {
-                final bytes = "Hello World".codeUnits;
-                await Client().putObject(
-                  bytes,
-                  "filename.txt",
-                  option: PutRequestOption(
-                    onSendProgress: (count, total) {
-                      if (kDebugMode) {
-                        print("send: count = $count, and total = $total");
-                      }
-                    },
-                    onReceiveProgress: (count, total) {
-                      if (kDebugMode) {
-                        print("receive: count = $count, and total = $total");
-                      }
-                    },
-                    override: false,
-                    aclModel: AclMode.private,
-                    storageType: StorageType.standard,
-                    callback: const Callback(
-                      callbackUrl: "callbackUrl",
-                      callbackBody:
-                          "{\"mimeType\":\${mimeType}, \"filepath\":\${object},\"size\":\${size},\"bucket\":\${bucket},\"phone\":\${x:phone}}",
-                      callbackVar: {"x:phone": "android"},
-                      calbackBodyType: CalbackBodyType.json,
-                    ),
-                  ),
-                );
-              },
-              child: const Text("Upload object"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await Client().getObject(
-                  "filename.txt",
-                  onReceiveProgress: (count, total) {
-                    debugPrint("received = $count, total = $total");
-                  },
-                );
-              },
-              child: const Text("Get object"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await Client().downloadObject(
-                  "filename.txt",
-                  "./example/savePath.txt",
-                  onReceiveProgress: (count, total) {
-                    debugPrint("received = $count, total = $total");
-                  },
-                );
-              },
-              child: const Text("Download object"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await Client().deleteObject("filename.txt");
-              },
-              child: const Text("Delete object"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await Client().putObjects(
-                  [
-                    AssetEntity(
-                      filename: "filename1.txt",
-                      bytes: "files1".codeUnits,
-                      option: PutRequestOption(
-                        onSendProgress: (count, total) {
-                          if (kDebugMode) {
-                            print("send: count = $count, and total = $total");
-                          }
-                        },
-                        onReceiveProgress: (count, total) {
-                          if (kDebugMode) {
-                            print(
-                                "receive: count = $count, and total = $total");
-                          }
-                        },
-                        override: true,
-                        aclModel: AclMode.inherited,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text("Status: $_status", style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 20),
+              TextButton(
+                onPressed: () async {
+                  final bytes = "Hello World".codeUnits;
+                  final PutObjectResult result = await Client().putObject(
+                    PutObjectRequest(
+                      key: "filename.txt",
+                      data: Uint8List.fromList(bytes),
+                      aclMode: AclMode.private,
+                      storageType: StorageType.standard,
+                      callback: const Callback(
+                        callbackUrl: "callbackUrl",
+                        callbackBody: r'{"mimeType":${mimeType},"filepath":${object},"size":${size},"bucket":${bucket},"phone":${x:phone}}',
+                        callbackVar: {"x:phone": "android"},
+                        calbackBodyType: CallbackBodyType.json,
                       ),
+                      onSendProgress: (count, total) {
+                        if (kDebugMode) print("send: $count / $total");
+                      },
                     ),
-                    AssetEntity(
-                        filename: "filename2.txt", bytes: "files2".codeUnits),
-                  ],
-                );
-              },
-              child: const Text("Batch upload object"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await Client()
-                    .deleteObjects(["filename1.txt", "filename2.txt"]);
-              },
-              child: const Text("Batch delete object"),
-            ),
-          ],
+                  );
+                  _updateStatus("Uploaded: ETag=${result.eTag}, Status=${result.statusCode}");
+                },
+                child: const Text("Upload object"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final ListObjectsResult result = await Client().listObjects(
+                    const ListObjectsRequest(maxKeys: 10, prefix: "filename"),
+                  );
+                  final buffer = StringBuffer("Objects (${result.objects.length}):\n");
+                  for (final obj in result.objects) {
+                    buffer.writeln("  - ${obj.key} (${obj.size} bytes)");
+                  }
+                  _updateStatus(buffer.toString());
+                },
+                child: const Text("List objects"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final ObjectMeta meta = await Client().getObjectMeta("filename.txt");
+                  _updateStatus(
+                    "Meta: size=${meta.contentLength}, type=${meta.contentType}, modified=${meta.lastModified}",
+                  );
+                },
+                child: const Text("Get object metadata"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final BytesResponse resp = await Client().getObject(
+                    const GetObjectRequest(key: "test.txt"),
+                  );
+                  _updateStatus("Get object: ${resp.statusCode}, ${resp.data.length} bytes");
+                },
+                child: const Text("Get object"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await Client().downloadObject(
+                    "filename.txt",
+                    "./example/savePath.txt",
+                    onReceiveProgress: (received, total) {
+                      debugPrint("received = $received, total = $total");
+                    },
+                  );
+                  _updateStatus("Download complete");
+                },
+                child: const Text("Download object"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final DeleteObjectResult result = await Client().deleteObject(
+                    const DeleteObjectRequest(key: "filename.txt"),
+                  );
+                  _updateStatus("Deleted: ${result.deleted}, Status: ${result.statusCode}");
+                },
+                child: const Text("Delete object"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final results = await Future.wait([
+                    Client().putObject(PutObjectRequest(
+                      key: "filename1.txt",
+                      data: Uint8List.fromList("files1".codeUnits),
+                      onSendProgress: (count, total) {
+                        if (kDebugMode) print("1: $count / $total");
+                      },
+                    )),
+                    Client().putObject(PutObjectRequest(
+                      key: "filename2.txt",
+                      data: Uint8List.fromList("files2".codeUnits),
+                      onSendProgress: (count, total) {
+                        if (kDebugMode) print("2: $count / $total");
+                      },
+                    )),
+                  ]);
+                  _updateStatus("Batch upload: ${results.length} files, "
+                      "statuses=[${results.map((r) => r.statusCode).join(', ')}]");
+                },
+                child: const Text("Batch upload"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final List<DeleteObjectResult> results = await Client().deleteObjects(
+                    const DeleteObjectsRequest(keys: ["filename1.txt", "filename2.txt"]),
+                  );
+                  _updateStatus("Batch delete: ${results.length} files, "
+                      "allDeleted=${results.every((r) => r.deleted)}");
+                },
+                child: const Text("Batch delete"),
+              ),
+            ],
+          ),
         ),
       ),
     );
