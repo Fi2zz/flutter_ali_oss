@@ -2,22 +2,30 @@ import 'dart:async';
 
 import 'model/auth.dart';
 
+/// Mixin that manages authentication state and token refresh.
 mixin AuthMixin {
-  late final FutureOr<Auth> Function() authGetter;
+  /// The user-provided authenticator that returns fresh [Auth] credentials.
+  late FutureOr<Auth> Function() authenticator;
 
-  Auth? auth;
+  Auth? _auth;
 
-  /// get auth information from sts server
+  /// Cached authentication credentials.
+  Auth? get auth => _auth;
+
+  /// Get valid auth credentials, refreshing if necessary.
   Future<Auth> getAuth() async {
-    if (isUnAuthenticated) {
-      auth = await authGetter();
-      return auth!;
+    if (isUnauthenticated) {
+      _auth = await authenticator();
+      return _auth!;
     }
-    return auth!;
+    return _auth!;
   }
 
-  /// whether auth is valid or not
-  bool get isUnAuthenticated {
-    return auth == null || auth!.isExpired;
+  /// Whether the current auth is missing or expired.
+  bool get isUnauthenticated {
+    return _auth == null || _auth!.isExpired;
   }
+
+  /// Force a re-authentication on the next request.
+  void clearAuth() => _auth = null;
 }

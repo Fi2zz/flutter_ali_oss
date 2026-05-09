@@ -8,7 +8,7 @@ class Callback {
     this.callbackHost,
     required this.callbackBody,
     this.callbackSNI,
-    this.calbackBodyType = CalbackBodyType.url,
+    this.calbackBodyType = CallbackBodyType.url,
     this.callbackVar,
   });
 
@@ -16,7 +16,7 @@ class Callback {
   final String? callbackHost;
   final String callbackBody;
   final bool? callbackSNI;
-  final CalbackBodyType? calbackBodyType;
+  final CallbackBodyType? calbackBodyType;
   final Map<String, String>? callbackVar;
 
   Map<String, String> toHeaders() {

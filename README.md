@@ -1,455 +1,318 @@
-Language: [中文简体](README.md) | [English](README_EN.md)
+# flutter_alioss
 
-# flutter_oss_aliyun
+一个**强类型**、**零 dio 依赖**的阿里云对象存储服务（OSS）Flutter SDK。
 
-一个访问阿里云oss并且支持STS临时访问凭证访问OSS的flutter库，基本上涵盖阿里云oss sdk的所有功能。⭐
+---
 
-**flutter pub**: [https://pub.dev/packages/flutter_oss_aliyun](https://pub.dev/packages/flutter_oss_aliyun)
+## 关于阿里云 OSS
 
-**oss sts document**: [https://help.aliyun.com/document_detail/100624.html](https://help.aliyun.com/document_detail/100624.html)
+**阿里云对象存储服务（Object Storage Service，简称 OSS）** 是阿里云提供的海量、安全、低成本、高可靠的云存储服务。其数据设计持久性不低于 99.9999999999%（12 个 9），服务可用性（或业务连续性）不低于 99.995%。
 
-## 🐱&nbsp; 初始化Client
+- **官方文档首页**：https://www.aliyun.com/product/oss
+- **开发者参考文档**：https://help.aliyun.com/zh/oss/developer-reference/overview
+- **API 功能列表**：https://help.aliyun.com/zh/oss/developer-reference/list-of-operations-by-function
+- **ListObjectsV2 API**：https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2
+- **PutObject API**：https://help.aliyun.com/zh/oss/developer-reference/putobject
+- **GetObject API**：https://help.aliyun.com/zh/oss/developer-reference/getobject
 
-添加依赖
+> 本 SDK 基于阿里云 OSS REST API 构建，所有操作均遵循阿里云官方 API 规范。
+> 版权所有：阿里云（Alibaba Cloud）
+
+---
+
+## 为什么 fork
+
+原包 `flutter_oss_aliyun` 存在两个核心问题：
+
+1. **所有 API 返回 `dynamic`** — 你不得不猜测字段名和类型，编译器无法帮你发现拼写错误
+2. **强耦合 dio** — 引入了大量不必要的依赖，且无法自定义 HTTP 层
+
+本重写版解决了这两个问题：
+- **强类型返回** — 每个 API 都有专属的 Result 类，IDE 自动补全 `result.eTag`、`object.size`、`bucket.creationDate`
+- **零 dio 依赖** — 直接使用 `dart:io` HttpClient，零外部 HTTP 依赖
+- **初始化极简** — 只需提供一个 `authenticator` 回调，无需 `stsUrl`、无需注入 `Dio`
+- **类型安全的请求对象** — `ListObjectsRequest(maxKeys: 10, prefix: "images/")` 替代原始的 `Map<String, dynamic>`
+
+---
+
+## 快速开始
+
+### 1. 添加依赖
 
 ```yaml
 dependencies:
-  flutter_oss_aliyun: ^6.4.2
+  flutter_alioss: ^1.0.0
 ```
 
-### **初始化oss client, 这里我们提供两种方式**
-
-#### 1. 提供sts server地址，需要后端添加这个api
+### 2. 初始化客户端
 
 ```dart
-Client.init(
-    stsUrl: "server url get sts token",
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucket name",
-);
-```
+import 'package:flutter_alioss/flutter_alioss.dart';
 
-后端api至少需要返回以下数据:
-
-```json
-{
-  "AccessKeyId": "AccessKeyId",
-  "AccessKeySecret": "AccessKeySecret",
-  "SecurityToken": "SecurityToken",
-  "Expiration": "2022-03-22T11:33:06Z"
-}
-```
-
-#### 2. 自定义authGetter得到Auth
-
-```dart
-Client.init(
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucketName",
-    authGetter: _authGetter
-);
-
-Auth _authGetter() {
-  return Auth(
-      accessKey: "accessKey",
-      accessSecret: 'accessSecret',
-      expire: '2023-02-23T14:02:46Z',
-      secureToken: 'token',
+void main() {
+  Client.init(
+    ossEndpoint: 'oss-cn-hangzhou.aliyuncs.com',
+    bucketName: 'my-bucket',
+    authenticator: () async {
+      // 从你的后端服务器获取 STS 临时凭证
+      final response = await http.get(Uri.parse('https://your-server.com/sts'));
+      final json = jsonDecode(response.body);
+      return Auth(
+        accessKey:    json['AccessKeyId'],
+        accessSecret: json['AccessKeySecret'],
+        secureToken:  json['SecurityToken'],
+        expire:       json['Expiration'],
+      );
+    },
   );
 }
 ```
 
-### Integrate with get_it
-`injectable`: https://pub.dev/packages/injectable
+`authenticator` 在凭证过期时会自动重新调用，无需手动管理 Token。
+
+### 3. 使用强类型 API
 
 ```dart
-@module
-abstract class OssProvider {
-  @singleton
-  Client client() {
-    return Client.init(
-      stsUrl: Env.stsUrl,
-      ossEndpoint: Env.endpointUrl,
-      bucketName: Env.bucketName,
-    );
-  }
+final client = Client();
+
+// 上传文件
+final PutObjectResult result = await client.putObjectWithRequest(
+  PutObjectRequest(
+    key: 'avatars/user-42.jpg',
+    data: imageBytes,
+    aclMode: AclMode.private,
+    storageType: StorageType.standard,
+  ),
+);
+print('上传成功，ETag: ${result.eTag}');
+
+// 列举对象（支持分页和过滤）
+// 对应阿里云 API: ListObjectsV2
+// 文档: https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2
+final ListObjectsResult list = await client.listObjectsWithRequest(
+  const ListObjectsRequest(maxKeys: 20, prefix: 'avatars/'),
+);
+for (final obj in list.objects) {
+  print('${obj.key} — ${obj.size} bytes — ${obj.lastModified}');
+}
+
+// 获取对象的临时访问签名 URL
+final String url = await client.getSignedUrl(
+  'avatars/user-42.jpg',
+  expireSeconds: 3600,
+);
+
+// 下载到本地
+await client.downloadObject(
+  'avatars/user-42.jpg',
+  '/tmp/user-42.jpg',
+  onReceiveProgress: (received, total) =>
+    print('${(received / total * 100).toStringAsFixed(0)}%'),
+);
+
+// 删除
+final DeleteObjectResult del = await client.deleteObject('avatars/user-42.jpg');
+assert(del.deleted);
+```
+
+---
+
+## 阿里云 OSS 数据类型映射
+
+本 SDK 的强类型模型完整映射阿里云 OSS REST API 的 XML/HTTP 响应格式：
+
+### 对象元数据
+
+```dart
+final ObjectMeta meta = await client.getObjectMeta('file.txt');
+meta.contentLength;   // int      (HTTP Content-Length)
+meta.contentType;     // String   (HTTP Content-Type)
+meta.lastModified;    // DateTime (HTTP Last-Modified)
+meta.eTag;            // String   (HTTP ETag)
+meta.storageClass;    // String?  (x-oss-storage-class)
+meta.serverSideEncryption; // String? (x-oss-server-side-encryption)
+```
+
+参考：[GetObjectMeta API 文档](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta)
+
+### 列举对象结果
+
+```dart
+final ListObjectsResult result = await client.listObjectsWithRequest(
+  const ListObjectsRequest(maxKeys: 10),
+);
+
+result.name;                    // String  Bucket 名称
+result.prefix;                  // String  请求前缀
+result.maxKeys;                 // int     最大返回条数
+result.isTruncated;             // bool    是否截断
+result.nextContinuationToken;   // String? 下一页 Token
+
+for (final object in result.objects) {
+  object.key;           // String   对象键名
+  object.size;          // int      对象大小（字节）
+  object.lastModified;  // DateTime 最后修改时间
+  object.eTag;          // String   实体标签
+  object.storageClass;  // String   存储类型（STANDARD / IA / ARCHIVE / COLDARCHIVE）
+  object.type;          // String?  对象类型（Normal / Multipart / Appendable）
+  object.owner?.id;     // String?  所有者 ID
 }
 ```
 
-**你可以传入`自定义的Dio`**
+参考：[ListObjectsV2 API 文档](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2)
 
-在init函数中，你可以传入dio，做到dio的定制化。比如日志或者其他的interceptors.
-
-```dart
-Client.init(
-    stsUrl: "server url get sts token",
-    ossEndpoint: "oss-cn-beijing.aliyuncs.com",
-    bucketName: "bucket name",
-    dio: Dio(BaseOptions(connectTimeout: 9000)),
-);
-```
-
-## 🎨&nbsp;使用
-
-- [文件上传](#put-object)
-- [追加文件上传](#append-object)
-- [跨bucket文件复制](#copy-object)
-- [取消文件上传](#cancel-put-object)
-- [批量文件上传](#batch-put-object)
-- [本地文件上传](#put-local-object)
-- [批量本地文件上传](#batch-put-local-object)
-- [文件下载](#download-object)
-- [查询文件是否存在](#does-object-exist)
-- [文件下载并保存](#save-object)
-- [文件删除](#delete-object)
-- [批量文件删除](#batch-delete-object)
-- [获取已签名的文件url](#get-signed-url)
-- [获取多个已签名的文件url](#batch-get-signed-url)
-- [列举所有的存储空间](#list-bucket)
-- [列举存储空间中所有文件](#list-file)
-- [获取bucket信息](#get-bucket-info)
-- [获取bucket的储容量以及文件数量](#get-bucket-detail)
-- [获取文件元信息](#get-object-metadata)
-- [regions的查询](#regions-query)
-- [bucket acl的操作](#bucket-acl)
-- [bucket policy的操作](#bucket-policy)
-
-### <span id="put-object">**文件上传**</span>
-
-关于callback的使用: <https://help.aliyun.com/document_detail/31989.htm?spm=a2c4g.11186623.0.0.73a830ffn45LMY#reference-zkm-311-hgb>
+### 列举 Bucket 结果
 
 ```dart
-final bytes = "file bytes".codeUnits;
-
-await Client().putObject(
-  bytes,
-  "test.txt",
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      print("send: count = $count, and total = $total");
-    },
-    onReceiveProgress: (count, total) {
-      print("receive: count = $count, and total = $total");
-    },
-    override: false,
-    aclModel: AclMode.publicRead,
-    storageType: StorageType.ia,
-    headers: {"cache-control": "no-cache"},
-    callback: Callback(
-      callbackUrl: "callback url",
-      callbackBody: "{\"mimeType\":\${mimeType}, \"filepath\":\${object},\"size\":\${size},\"bucket\":\${bucket},\"phone\":\${x:phone}}",
-      callbackVar: {"x:phone": "android"},
-      calbackBodyType: CalbackBodyType.json,
-    ),       
-  ),
-);
-```
-
-**PutRequestOption 字段说明,字段皆为非必需**
-
-| Filed       | Default value | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ----------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| override    | true          | true: 允许覆盖同名Object<br>false: 禁止覆盖同名Object                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| aclModel    | inherited     | 1. publicWrite: 任何人（包括匿名访问者）都可以对该Object进行读写操作<br>2. publicRead: 只有该Object的拥有者可以对该Object进行写操作，任何人（包括匿名访问者）都可以对该Object进行读操作<br>3. private: 只有Object的拥有者可以对该Object进行读写操作，其他人无法访问该Object<br>4. inherited: 该Object遵循Bucket的读写权限，即Bucket是什么权限，Object就是什么权限<br>参考文档: <https://help.aliyun.com/document_detail/100676.htm?spm=a2c4g.11186623.0.0.56637952SnxOWV#concept-blw-yqm-2gb> |
-| storageType | Standard      | 参考文档: <https://help.aliyun.com/document_detail/51374.htm?spm=a2c4g.11186623.0.0.56632b55htpEQX#concept-fcn-3xt-tdb>                                                                                                                                                                                                                                                                                                                                                                       |
-
-### <span id="append-object">**追加文件上传**</span>
-
-```dart
-final Response<dynamic> resp = await Client().appendObject(
-  Uint8List.fromList(utf8.encode("Hello World")),
-  "test_append.txt",
+final ListBucketsResult result = await client.listBucketsWithRequest(
+  const ListBucketsRequest(maxKeys: 10),
 );
 
-final Response<dynamic> resp2 = await Client().appendObject(
-  position: int.parse(resp.headers["x-oss-next-append-position"]?[0]),
-  Uint8List.fromList(utf8.encode(", Fluter.")),
-  "test_append.txt",
+result.owner.id;        // String  所有者 ID
+result.owner.displayName; // String 所有者显示名
+
+for (final bucket in result.buckets) {
+  bucket.name;          // String  Bucket 名称
+  bucket.creationDate;  // DateTime 创建时间
+  bucket.location;      // String  地域（如 oss-cn-hangzhou）
+  bucket.storageClass;  // String  存储类型
+}
+```
+
+参考：[ListBuckets API 文档](https://help.aliyun.com/zh/oss/developer-reference/listbuckets)
+
+### Bucket 信息
+
+```dart
+final BucketInfo info = await client.getBucketInfo();
+
+info.name;              // String  Bucket 名称
+info.location;          // String  地域
+info.creationDate;      // DateTime 创建时间
+info.extranetEndpoint;  // String  外网 Endpoint
+info.intranetEndpoint;  // String  内网 Endpoint
+info.acl;               // String  访问控制（private / public-read / public-read-write）
+info.storageClass;      // String  默认存储类型
+info.versioning;        // String?  版本控制状态
+info.transferAcceleration; // String? 传输加速状态
+```
+
+参考：[GetBucketInfo API 文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo)
+
+---
+
+## 阿里云 OSS 存储类型
+
+参考：[存储类型概述](https://help.aliyun.com/zh/oss/user-guide/overview-of-storage-classes)
+
+| 枚举值 | 阿里云值 | 适用场景 |
+|--------|---------|---------|
+| `StorageType.standard` | `"STANDARD"` | 频繁访问的图片、视频、文件 |
+| `StorageType.ia` | `"IA"` | 月均访问 1-2 次的备份数据 |
+| `StorageType.archive` | `"ARCHIVE"` | 长期归档、需解冻后访问 |
+| `StorageType.coldArchive` | `"COLDARCHIVE"` | 超长期冷归档 |
+| `StorageType.deepColdArchive` | `"DEEPCOLDARCHIVE"` | 极少访问的合规归档 |
+
+---
+
+## 阿里云 OSS ACL 权限
+
+参考：[访问控制（ACL）](https://help.aliyun.com/zh/oss/user-guide/acls)
+
+| 枚举值 | 阿里云值 | 说明 |
+|--------|---------|------|
+| `AclMode.private` | `"private"` | 只有所有者可以读写 |
+| `AclMode.publicRead` | `"public-read"` | 所有人可读，仅所有者可写 |
+| `AclMode.publicReadWrite` | `"public-read-write"` | 所有人可读写（不推荐） |
+| `AclMode.inherited` | `"default"` | 继承 Bucket ACL |
+
+---
+
+## API 对照表
+
+| SDK 方法 | 阿里云 OSS API | 文档链接 |
+|----------|---------------|----------|
+| `putObject` / `putObjectWithRequest` | PutObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/putobject) |
+| `getObject` / `getObjectWithRequest` | GetObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
+| `getObjectMeta` | GetObjectMeta | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta) |
+| `copyObject` / `copyObjectWithRequest` | CopyObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/copyobject) |
+| `appendObject` / `appendObjectWithRequest` | AppendObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/appendobject) |
+| `deleteObject` | DeleteObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/deleteobject) |
+| `listObjects` / `listObjectsWithRequest` | ListObjectsV2 | [文档](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2) |
+| `listBuckets` / `listBucketsWithRequest` | ListBuckets | [文档](https://help.aliyun.com/zh/oss/developer-reference/listbuckets) |
+| `getBucketInfo` | GetBucketInfo | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo) |
+| `getBucketStat` | GetBucketStat | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat) |
+| `getBucketAcl` / `putBucketAcl` | GetBucketAcl / PutBucketAcl | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl) |
+| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy | [文档](https://help.aliyun.com/zh/oss/user-guide/bucket-policy) |
+| `getSignedUrl` | 签名 URL | [文档](https://help.aliyun.com/zh/oss/developer-reference/signatures) |
+| `downloadObject` | GetObject（流式下载）| [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
+| `getAllRegions` / `getRegion` | GetRegion | [文档](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints) |
+
+---
+
+## 请求类型（Request Classes）
+
+| 操作 | 旧版（仍兼容） | 新版（推荐） |
+|------|---------------|-------------|
+| 列举对象 | `listObjects({"max-keys": 10})` | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))` |
+| 上传对象 | `putObject(bytes, "key", option: ...)` | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))` |
+| 拷贝对象 | `copyObject(CopyRequestOption(...))` | `copyObjectWithRequest(CopyObjectRequest(...))` |
+| 追加上传 | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))` |
+| 上传文件 | `putObjectFile("/path", option: ...)` | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+
+---
+
+## 取消操作
+
+所有异步方法都支持可选的 `CancelToken`：
+
+```dart
+final token = CancelToken();
+
+client.putObjectWithRequest(
+  PutObjectRequest(key: 'big.zip', data: bytes),
+  cancelToken: token,
 );
+
+// 稍后取消
+token.cancel('用户取消');  // 在等待处抛出 CancelException
 ```
 
-### <span id="copy-object">**跨bucket复制文件**</span>
+---
+
+## 错误处理
+
+SDK 在 HTTP 错误时抛出 `OssException`：
 
 ```dart
-final Response<dynamic> resp = await Client().copyObject(
-  const CopyRequestOption(
-    sourceFileKey: 'test.csv',
-    targetFileKey: "test_copy.csv",
-    targetBucketName: "bucket_2"
-  ),
-);
+try {
+  await client.getObjectMeta('不存在的文件.txt');
+} on OssException catch (e) {
+  print('${e.statusCode}: ${e.message}');     // 404: NoSuchKey
+  print('Request ID: ${e.requestId}');         // 用于阿里云技术支持排查
+  print('错误码: ${e.code}');                   // NoSuchKey
+}
 ```
 
-### <span id="cancel-put-object">**取消文件上传**</span>
+常见阿里云 OSS 错误码：[错误响应](https://help.aliyun.com/zh/oss/developer-reference/error-responses)
 
-```dart
-final CancelToken cancelToken = CancelToken();
-final bytes = ("long long bytes" * 1000).codeUnits;
+---
 
-Client().putObject(
-  Uint8List.fromList(utf8.encode(string)),
-  "cancel_token_test.txt",
-  cancelToken: cancelToken,
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      if (kDebugMode) {
-        print("send: count = $count, and total = $total");
-      }
-      if (count > 56) {
-        cancelToken.cancel("cancel the uploading.");
-      }
-    },
-  ),
-).then((response) {
-  // success
-  print("upload success = ${response.statusCode}");
-}).catchError((err) {
-  if (CancelToken.isCancel(err)) {
-    print("error message = ${err.message}");
-  } else {
-    // handle other errors
-  }
-});
-```
+## 与原版 `flutter_oss_aliyun` 的破坏性变更
 
-### <span id="batch-put-object">**批量文件上传**</span>
+| 变更项 | 之前 | 之后 |
+|--------|------|------|
+| 初始化 | `Client.init(stsUrl: ..., authGetter: ...)` | `Client.init(authenticator: ...)`（必填） |
+| dio 注入 | `Client.init(dio: myDio)` | 已移除 — 不再使用 dio |
+| 列举对象返回 | `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)` |
+| 上传对象返回 | `Future<Response<dynamic>> putObject(...)` | `Future<PutObjectResult> putObject(...)` |
+| CancelToken | `package:dio` 的 CancelToken | `package:flutter_alioss` 的 CancelToken |
+| 响应类型 | `Response<dynamic>` (dio) | `BytesResponse` / `StringResponse` / `EmptyResponse` |
 
-```dart
-await Client().putObjects([
-  AssetEntity(
-    filename: "filename1.txt",
-    bytes: "files1".codeUnits,
-    option: PutRequestOption(
-      onSendProgress: (count, total) {
-        print("send: count = $count, and total = $total");
-      },
-      onReceiveProgress: (count, total) {
-        print("receive: count = $count, and total = $total");
-      },
-      aclModel: AclMode.private,
-    ),
-  ),
-  AssetEntity(filename: "filename2.txt", bytes: "files2".codeUnits),
-]);
-```
+---
 
-### <span id="put-local-object">**本地文件上传**</span>
+## 许可
 
-```dart
-final Response<dynamic> resp = await Client().putObjectFile(
-  "/Users/aaa.pdf",
-  fileKey: "aaa.png",
-  option: PutRequestOption(
-    onSendProgress: (count, total) {
-      print("send: count = $count, and total = $total");
-    },
-    onReceiveProgress: (count, total) {
-      print("receive: count = $count, and total = $total");
-    },
-    aclModel: AclMode.private,
-    callback: Callback(
-      callbackUrl: callbackUrl,
-      callbackBody:
-          "{\"mimeType\":\${mimeType}, \"filepath\":\${object},\"size\":\${size},\"bucket\":\${bucket},\"phone\":\${x:phone}}",
-      callbackVar: {"x:phone": "android"},
-      calbackBodyType: CalbackBodyType.json,
-    ),    
-  ),
-);
-```
+本 SDK 基于阿里云 OSS REST API 构建。阿里云及阿里云 OSS 相关的商标、文档版权归[阿里巴巴集团](https://www.alibabagroup.com/)所有。
 
-### <span id="batch-put-local-object">**批量本地文件上传**</span>
-
-```dart
-final List<Response<dynamic>> resp = await Client().putObjectFiles(
-  [
-    AssetFileEntity(
-      filepath: "//Users/private.txt",
-      option: PutRequestOption(
-        onSendProgress: (count, total) {
-          print("send: count = $count, and total = $total");
-        },
-        onReceiveProgress: (count, total) {
-          print("receive: count = $count, and total = $total");
-        },
-        override: false,
-        aclModel: AclMode.private,
-      ),
-    ),
-    AssetFileEntity(
-      filepath: "//Users/splash.png",
-      filename: "aaa.png",
-      option: PutRequestOption(
-        onSendProgress: (count, total) {
-          print("send: count = $count, and total = $total");
-        },
-        onReceiveProgress: (count, total) {
-          print("receive: count = $count, and total = $total");
-        },
-        override: true,
-      ),
-    ),
-  ],
-);
-```
-
-### <span id="download-object">**文件下载**</span>
-
-```dart
-await Client().getObject(
-  "test.txt",
-  onReceiveProgress: (count, total) {
-    debugPrint("received = $count, total = $total");
-  },
-);
-```
-
-### <span id="does-object-exist">**查询文件是否存在**</span>
-```dart
-final bool isExisted = await Client().doesObjectExist(
-    "aaa.jpg",
-);
-```
-
-### <span id="save-object">**文件下载并保存**</span>
-
-```dart
-await Client().downloadObject(
-  "test.txt",
-  "./example/test.txt",
-  onReceiveProgress: (count, total) {
-    debugPrint("received = $count, total = $total");
-  },
-);
-```
-
-### <span id="delete-object">**文件删除**</span>
-
-```dart
-await Client().deleteObject("test.txt");
-```
-
-### <span id="batch-delete-object">**批量文件删除**</span>
-
-```dart
-await Client().deleteObjects(["filename1.txt", "filename2.txt"]);
-```
-
-### <span id="get-signed-url">**获取已签名的文件url**</span>
-
-需要注意的是: 这个操作并`不安全`，因为url包含security-token信息，即使过期时间比较短. 这个url可以直接在浏览器访问
-
-```dart
-final String url = await Client().getSignedUrl(
-  "test.jpg",
-  params: {"x-oss-process": "image/resize,w_10/quality,q_90"},
-);
-```
-
-### <span id="batch-get-signed-url">**获取多个已签名的文件url**</span>
-
-需要注意的是: 这个操作并`不安全`，因为url包含security-token信息，即使过期时间比较短
-
-```dart
-final Map<String, String> result = await Client().getSignedUrls(["test.txt", "filename1.txt"]);
-```
-
-### <span id="list-bucket">**列举所有的存储空间**</span>
-
-列举请求者拥有的所有存储空间（Bucket）。您还可以通过设置prefix、marker或者max-keys参数列举满足指定条件的存储空间。参考: <https://help.aliyun.com/document_detail/31957.html>
-
-```dart
-final Response<dynamic> resp = await Client().listBuckets({"max-keys": 2});
-```
-
-### <span id="list-file">**列举存储空间中所有文件**</span>
-
-接口用于列举存储空间（Bucket）中所有文件（Object）的信息。请求参数和返回结果，请参考: <https://help.aliyun.com/document_detail/187544.html>
-
-```dart
-final Response<dynamic> resp = await Client().listFiles({});
-```
-
-### <span id="get-bucket-info">**获取bucket信息**</span>
-
-查看存储空间（Bucket）的相关信息。返回结果请参考: <https://help.aliyun.com/document_detail/31968.html>
-
-```dart
-final Response<dynamic> resp = await Client().getBucketInfo();
-```
-
-### <span id="get-bucket-detail">**获取bucket的储容量以及文件数量**</span>
-
-获取指定存储空间（Bucket）的存储容量以及文件（Object）数量。返回结果请参考: <https://help.aliyun.com/document_detail/426056.html>
-
-```dart
-final Response<dynamic> resp = await Client().getBucketStat();
-```
-
-### <span id="get-object-metadata">**获取文件元信息**</span>
-
-```dart
-final Response<dynamic> resp = await Client().getObjectMeta("huhx.csv");
-```
-
-### <span id="regions-query">**regions的查询**</span>
-
-- 查询所有
-
-```dart
-final Response<dynamic> resp = await Client().getAllRegions();
-```
-
-- 查询特定
-
-```dart
-final Response<dynamic> resp = await Client().getRegion("oss-ap-northeast-1");
-```
-
-### <span id="bucket-acl">**bucket acl的操作**</span>
-
-- 查询
-
-```dart
-final Response<dynamic> resp = await Client().getBucketAcl(
-  bucketName: "bucket-name",
-);
-```
-
-- 更新
-
-```dart
-final Response<dynamic> resp = await Client().putBucketAcl(
-  AciMode.publicRead, 
-  bucketName: "bucket-name",
-);
-```
-
-### <span id="bucket-policy">**bucket policy的操作**</span>
-
-- 查询
-
-```dart
-final Response<dynamic> resp = await Client().getBucketPolicy(
-  bucketName: "bucket-name",
-);
-```
-
-- 更新
-
-```dart
-final Response<dynamic> resp = await Client().putBucketPolicy(
-  {}, 
-  bucketName: "bucket-name",
-);
-```
-
-- 删除
-
-```dart
-final Response<dynamic> resp = await Client().deleteBucketPolicy(
-  bucketName: "bucket-name",
-);
-```
-
-## Drop a ⭐ if it is help to you
+本项目采用 MIT 许可证。参见 [LICENSE](LICENSE) 文件。
