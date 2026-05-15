@@ -28,6 +28,7 @@
 2. **强耦合 dio** — 引入了大量不必要的依赖，且无法自定义 HTTP 层
 
 本重写版解决了这两个问题：
+
 - **强类型返回** — 每个 API 都有专属的 Result 类，IDE 自动补全 `result.eTag`、`object.size`、`bucket.creationDate`
 - **零 dio 依赖** — 直接使用 `dart:io` HttpClient，零外部 HTTP 依赖
 - **初始化极简** — 只需提供一个 `authenticator` 回调，无需 `stsUrl`、无需注入 `Dio`
@@ -41,7 +42,7 @@
 
 ```yaml
 dependencies:
-  flutter_alioss: ^1.0.0
+    flutter_alioss: ^1.0.0
 ```
 
 ### 2. 初始化客户端
@@ -205,13 +206,13 @@ info.transferAcceleration; // String? 传输加速状态
 
 参考：[存储类型概述](https://help.aliyun.com/zh/oss/user-guide/overview-of-storage-classes)
 
-| 枚举值 | 阿里云值 | 适用场景 |
-|--------|---------|---------|
-| `StorageType.standard` | `"STANDARD"` | 频繁访问的图片、视频、文件 |
-| `StorageType.ia` | `"IA"` | 月均访问 1-2 次的备份数据 |
-| `StorageType.archive` | `"ARCHIVE"` | 长期归档、需解冻后访问 |
-| `StorageType.coldArchive` | `"COLDARCHIVE"` | 超长期冷归档 |
-| `StorageType.deepColdArchive` | `"DEEPCOLDARCHIVE"` | 极少访问的合规归档 |
+| 枚举值                        | 阿里云值            | 适用场景                   |
+| ----------------------------- | ------------------- | -------------------------- |
+| `StorageType.standard`        | `"STANDARD"`        | 频繁访问的图片、视频、文件 |
+| `StorageType.ia`              | `"IA"`              | 月均访问 1-2 次的备份数据  |
+| `StorageType.archive`         | `"ARCHIVE"`         | 长期归档、需解冻后访问     |
+| `StorageType.coldArchive`     | `"COLDARCHIVE"`     | 超长期冷归档               |
+| `StorageType.deepColdArchive` | `"DEEPCOLDARCHIVE"` | 极少访问的合规归档         |
 
 ---
 
@@ -219,46 +220,260 @@ info.transferAcceleration; // String? 传输加速状态
 
 参考：[访问控制（ACL）](https://help.aliyun.com/zh/oss/user-guide/acls)
 
-| 枚举值 | 阿里云值 | 说明 |
-|--------|---------|------|
-| `AclMode.private` | `"private"` | 只有所有者可以读写 |
-| `AclMode.publicRead` | `"public-read"` | 所有人可读，仅所有者可写 |
-| `AclMode.publicReadWrite` | `"public-read-write"` | 所有人可读写（不推荐） |
-| `AclMode.inherited` | `"default"` | 继承 Bucket ACL |
+| 枚举值                    | 阿里云值              | 说明                     |
+| ------------------------- | --------------------- | ------------------------ |
+| `AclMode.private`         | `"private"`           | 只有所有者可以读写       |
+| `AclMode.publicRead`      | `"public-read"`       | 所有人可读，仅所有者可写 |
+| `AclMode.publicReadWrite` | `"public-read-write"` | 所有人可读写（不推荐）   |
+| `AclMode.inherited`       | `"default"`           | 继承 Bucket ACL          |
 
 ---
 
 ## API 对照表
 
-| SDK 方法 | 阿里云 OSS API | 文档链接 |
-|----------|---------------|----------|
-| `putObject` / `putObjectWithRequest` | PutObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/putobject) |
-| `getObject` / `getObjectWithRequest` | GetObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
-| `getObjectMeta` | GetObjectMeta | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta) |
-| `copyObject` / `copyObjectWithRequest` | CopyObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/copyobject) |
-| `appendObject` / `appendObjectWithRequest` | AppendObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/appendobject) |
-| `deleteObject` | DeleteObject | [文档](https://help.aliyun.com/zh/oss/developer-reference/deleteobject) |
-| `listObjects` / `listObjectsWithRequest` | ListObjectsV2 | [文档](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2) |
-| `listBuckets` / `listBucketsWithRequest` | ListBuckets | [文档](https://help.aliyun.com/zh/oss/developer-reference/listbuckets) |
-| `getBucketInfo` | GetBucketInfo | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo) |
-| `getBucketStat` | GetBucketStat | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat) |
-| `getBucketAcl` / `putBucketAcl` | GetBucketAcl / PutBucketAcl | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl) |
-| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy | [文档](https://help.aliyun.com/zh/oss/user-guide/bucket-policy) |
-| `getSignedUrl` | 签名 URL | [文档](https://help.aliyun.com/zh/oss/developer-reference/signatures) |
-| `downloadObject` | GetObject（流式下载）| [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
-| `getAllRegions` / `getRegion` | GetRegion | [文档](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints) |
+| SDK 方法                                                     | 阿里云 OSS API                             | 文档链接                                                                           |
+| ------------------------------------------------------------ | ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `putObject` / `putObjectWithRequest`                         | PutObject                                  | [文档](https://help.aliyun.com/zh/oss/developer-reference/putobject)               |
+| `getObject` / `getObjectWithRequest`                         | GetObject                                  | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject)               |
+| `getObjectMeta`                                              | GetObjectMeta                              | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta)           |
+| `copyObject` / `copyObjectWithRequest`                       | CopyObject                                 | [文档](https://help.aliyun.com/zh/oss/developer-reference/copyobject)              |
+| `appendObject` / `appendObjectWithRequest`                   | AppendObject                               | [文档](https://help.aliyun.com/zh/oss/developer-reference/appendobject)            |
+| `deleteObject`                                               | DeleteObject                               | [文档](https://help.aliyun.com/zh/oss/developer-reference/deleteobject)            |
+| `listObjects` / `listObjectsWithRequest`                     | ListObjectsV2                              | [文档](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2)           |
+| `listBuckets` / `listBucketsWithRequest`                     | ListBuckets                                | [文档](https://help.aliyun.com/zh/oss/developer-reference/listbuckets)             |
+| `getBucketInfo`                                              | GetBucketInfo                              | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo)           |
+| `getBucketStat`                                              | GetBucketStat                              | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat)           |
+| `getBucketAcl` / `putBucketAcl`                              | GetBucketAcl / PutBucketAcl                | [文档](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl)            |
+| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy                              | [文档](https://help.aliyun.com/zh/oss/user-guide/bucket-policy)                    |
+| `getSignedUrl`                                               | 签名 URL                                   | [文档](https://help.aliyun.com/zh/oss/developer-reference/signatures)              |
+| `downloadObject`                                             | GetObject（流式下载）                      | [文档](https://help.aliyun.com/zh/oss/developer-reference/getobject)               |
+| `getAllRegions` / `getRegion`                                | GetRegion                                  | [文档](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints)       |
+| `initiateMultipartUpload`                                    | InitiateMultipartUpload                    | [文档](https://help.aliyun.com/zh/oss/developer-reference/initiatemultipartupload) |
+| `uploadPart`                                                 | UploadPart                                 | [文档](https://help.aliyun.com/zh/oss/developer-reference/uploadpart)              |
+| `completeMultipartUpload`                                    | CompleteMultipartUpload                    | [文档](https://help.aliyun.com/zh/oss/developer-reference/completemultipartupload) |
+| `abortMultipartUpload`                                       | AbortMultipartUpload                       | [文档](https://help.aliyun.com/zh/oss/developer-reference/abortmultipartupload)    |
+| `listMultipartUploads`                                       | ListMultipartUploads                       | [文档](https://help.aliyun.com/zh/oss/developer-reference/listmultipartuploads)    |
+| `listParts`                                                  | ListParts                                  | [文档](https://help.aliyun.com/zh/oss/developer-reference/listparts)               |
+| `multipartUploadFile` / `multipartUploadFiles`               | Multipart Upload（SDK 高层封装）           | [文档](https://help.aliyun.com/zh/oss/user-guide/multipart-upload)                 |
+| `uploadFile` / `uploadFiles`                                 | 自动选择普通上传或分片上传（SDK 高层封装） | [文档](https://help.aliyun.com/zh/oss/user-guide/multipart-upload)                 |
 
 ---
 
 ## 请求类型（Request Classes）
 
-| 操作 | 旧版（仍兼容） | 新版（推荐） |
-|------|---------------|-------------|
-| 列举对象 | `listObjects({"max-keys": 10})` | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))` |
-| 上传对象 | `putObject(bytes, "key", option: ...)` | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))` |
-| 拷贝对象 | `copyObject(CopyRequestOption(...))` | `copyObjectWithRequest(CopyObjectRequest(...))` |
-| 追加上传 | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))` |
-| 上传文件 | `putObjectFile("/path", option: ...)` | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+| 操作     | 旧版（仍兼容）                            | 新版（推荐）                                                        |
+| -------- | ----------------------------------------- | ------------------------------------------------------------------- |
+| 列举对象 | `listObjects({"max-keys": 10})`           | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))`           |
+| 上传对象 | `putObject(bytes, "key", option: ...)`    | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))`   |
+| 拷贝对象 | `copyObject(CopyRequestOption(...))`      | `copyObjectWithRequest(CopyObjectRequest(...))`                     |
+| 追加上传 | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))`                 |
+| 上传文件 | `putObjectFile("/path", option: ...)`     | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+
+---
+
+## 分片上传 Multipart Upload
+
+当文件较大时，推荐使用 Multipart Upload。SDK 同时提供底层 API 和高层封装。
+
+### 高层封装：单文件分片上传
+
+```dart
+final result = await Client().multipartUploadFile(
+  MultipartUploadFileRequest(
+    filepath: '/local/path/archive.tar',
+    key: 'backup/archive.tar',
+    partSize: 8 * 1024 * 1024,
+    parallel: 3,
+    resumable: true,
+    checkpointDir: '/local/path/.oss-checkpoints',
+    onSendProgress: (count, total) {
+      print('总进度: $count / $total');
+    },
+    onPartProgress: (partNumber, count, total) {
+      print('分片 $partNumber: $count / $total');
+    },
+  ),
+);
+
+print(result.bucket);
+print(result.key);
+print(result.eTag);
+```
+
+### 高层封装：批量分片上传
+
+```dart
+final results = await Client().multipartUploadFiles(
+  MultipartUploadFilesRequest(
+    parallel: 2,
+    files: const [
+      MultipartUploadFileRequest(
+        filepath: '/local/path/a.tar',
+        key: 'backup/a.tar',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+      MultipartUploadFileRequest(
+        filepath: '/local/path/b.tar',
+        key: 'backup/b.tar',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+    ],
+    onProgress: (completed, total) {
+      print('批量分片上传: $completed / $total');
+    },
+  ),
+);
+
+print(results.map((item) => item.key).toList());
+```
+
+### 底层 API：手动控制分片流程
+
+```dart
+final init = await Client().initiateMultipartUpload(
+  const InitiateMultipartUploadRequest(
+    key: 'backup/manual.tar',
+  ),
+);
+
+final part1 = await Client().uploadPart(
+  UploadPartRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    partNumber: 1,
+    data: bytesPart1,
+  ),
+);
+
+final part2 = await Client().uploadPart(
+  UploadPartRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    partNumber: 2,
+    data: bytesPart2,
+  ),
+);
+
+final complete = await Client().completeMultipartUpload(
+  CompleteMultipartUploadRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    parts: [
+      UploadedPart(partNumber: 1, eTag: part1.eTag),
+      UploadedPart(partNumber: 2, eTag: part2.eTag),
+    ],
+  ),
+);
+
+print(complete.location);
+```
+
+### 查询与取消分片任务
+
+```dart
+final uploads = await Client().listMultipartUploads(
+  const ListMultipartUploadsRequest(prefix: 'backup/'),
+);
+
+final first = uploads.uploads.first;
+
+final parts = await Client().listParts(
+  ListPartsRequest(
+    key: first.key,
+    uploadId: first.uploadId,
+  ),
+);
+
+print(parts.parts.length);
+
+await Client().abortMultipartUpload(first.key, first.uploadId);
+```
+
+### 断点续传说明
+
+- 开启 `resumable: true` 后，SDK 会把 `uploadId` 和已完成分片写入 `checkpointDir`
+- 同一个文件再次发起上传时，会优先读取 checkpoint，仅补传缺失分片
+- 如果本地文件大小或最后修改时间发生变化，旧 checkpoint 会自动失效并删除
+- 未开启 `resumable` 时，分片上传失败会自动调用 `abortMultipartUpload`
+
+---
+
+## 自动上传与断点续传
+
+小文件可以直接走普通上传，大文件可以自动切换到 Multipart Upload：
+
+```dart
+final result = await Client().uploadFile(
+  UploadFileRequest(
+    filepath: '/local/path/video.mp4',
+    key: 'videos/video.mp4',
+    multipartThreshold: 32 * 1024 * 1024,
+    partSize: 8 * 1024 * 1024,
+    parallel: 3,
+    resumable: true,
+    checkpointDir: '/local/path/.oss-checkpoints',
+    onSendProgress: (count, total) {
+      print('总进度: $count / $total');
+    },
+    onPartProgress: (partNumber, count, total) {
+      print('分片 $partNumber: $count / $total');
+    },
+  ),
+);
+
+print(result.mode);      // UploadMode.simple / UploadMode.multipart
+print(result.location);  // 对象访问地址
+```
+
+如果中途失败，再次调用同样的 `UploadFileRequest` 会优先读取 checkpoint，仅续传未完成分片。
+
+### 批量自动上传
+
+```dart
+final results = await Client().uploadFiles(
+  UploadFilesRequest(
+    parallel: 2,
+    files: const [
+      UploadFileRequest(
+        filepath: '/local/path/a.zip',
+        key: 'backup/a.zip',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+      UploadFileRequest(
+        filepath: '/local/path/b.zip',
+        key: 'backup/b.zip',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+    ],
+    onProgress: (completed, total) {
+      print('批量进度: $completed / $total');
+    },
+  ),
+);
+
+print(results.map((item) => item.mode).toList());
+```
+
+### 分片任务查询
+
+```dart
+final uploads = await Client().listMultipartUploads(
+  const ListMultipartUploadsRequest(prefix: 'backup/'),
+);
+
+final parts = await Client().listParts(
+  ListPartsRequest(
+    key: uploads.uploads.first.key,
+    uploadId: uploads.uploads.first.uploadId,
+  ),
+);
+
+print(parts.parts.length);
+```
 
 ---
 
@@ -300,14 +515,14 @@ try {
 
 ## 与原版 `flutter_oss_aliyun` 的破坏性变更
 
-| 变更项 | 之前 | 之后 |
-|--------|------|------|
-| 初始化 | `Client.init(stsUrl: ..., authGetter: ...)` | `Client.init(authenticator: ...)`（必填） |
-| dio 注入 | `Client.init(dio: myDio)` | 已移除 — 不再使用 dio |
-| 列举对象返回 | `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)` |
-| 上传对象返回 | `Future<Response<dynamic>> putObject(...)` | `Future<PutObjectResult> putObject(...)` |
-| CancelToken | `package:dio` 的 CancelToken | `package:flutter_alioss` 的 CancelToken |
-| 响应类型 | `Response<dynamic>` (dio) | `BytesResponse` / `StringResponse` / `EmptyResponse` |
+| 变更项       | 之前                                         | 之后                                                 |
+| ------------ | -------------------------------------------- | ---------------------------------------------------- |
+| 初始化       | `Client.init(stsUrl: ..., authGetter: ...)`  | `Client.init(authenticator: ...)`（必填）            |
+| dio 注入     | `Client.init(dio: myDio)`                    | 已移除 — 不再使用 dio                                |
+| 列举对象返回 | `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)`         |
+| 上传对象返回 | `Future<Response<dynamic>> putObject(...)`   | `Future<PutObjectResult> putObject(...)`             |
+| CancelToken  | `package:dio` 的 CancelToken                 | `package:flutter_alioss` 的 CancelToken              |
+| 响应类型     | `Response<dynamic>` (dio)                    | `BytesResponse` / `StringResponse` / `EmptyResponse` |
 
 ---
 

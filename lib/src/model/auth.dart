@@ -116,12 +116,17 @@ class Auth {
     if (fileKey.isNotEmpty) path += fileKey;
     final String signedParamString = param.keys
         .where((key) => SignParameters.signedParams.contains(key))
-        .map((item) => "$item=${param[item]}")
+        .map((item) => _signedParam(item, param[item]))
         .join("&");
     if (signedParamString.isNotEmpty) {
       path += "?$signedParamString";
     }
 
     return path;
+  }
+
+  String _signedParam(String key, dynamic value) {
+    if (value == null || value.toString().isEmpty) return key;
+    return "$key=$value";
   }
 }

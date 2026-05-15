@@ -55,7 +55,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text("Status: $_status", style: Theme.of(context).textTheme.titleMedium),
+              Text("Status: $_status",
+                  style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 20),
               TextButton(
                 onPressed: () async {
@@ -68,7 +69,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       storageType: StorageType.standard,
                       callback: const Callback(
                         callbackUrl: "callbackUrl",
-                        callbackBody: r'{"mimeType":${mimeType},"filepath":${object},"size":${size},"bucket":${bucket},"phone":${x:phone}}',
+                        callbackBody:
+                            r'{"mimeType":${mimeType},"filepath":${object},"size":${size},"bucket":${bucket},"phone":${x:phone}}',
                         callbackVar: {"x:phone": "android"},
                         calbackBodyType: CallbackBodyType.json,
                       ),
@@ -77,7 +79,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
                   );
-                  _updateStatus("Uploaded: ETag=${result.eTag}, Status=${result.statusCode}");
+                  _updateStatus(
+                      "Uploaded: ETag=${result.eTag}, Status=${result.statusCode}");
                 },
                 child: const Text("Upload object"),
               ),
@@ -86,7 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   final ListObjectsResult result = await Client().listObjects(
                     const ListObjectsRequest(maxKeys: 10, prefix: "filename"),
                   );
-                  final buffer = StringBuffer("Objects (${result.objects.length}):\n");
+                  final buffer =
+                      StringBuffer("Objects (${result.objects.length}):\n");
                   for (final obj in result.objects) {
                     buffer.writeln("  - ${obj.key} (${obj.size} bytes)");
                   }
@@ -96,7 +100,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               TextButton(
                 onPressed: () async {
-                  final ObjectMeta meta = await Client().getObjectMeta("filename.txt");
+                  final ObjectMeta meta =
+                      await Client().getObjectMeta("filename.txt");
                   _updateStatus(
                     "Meta: size=${meta.contentLength}, type=${meta.contentType}, modified=${meta.lastModified}",
                   );
@@ -108,7 +113,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   final BytesResponse resp = await Client().getObject(
                     const GetObjectRequest(key: "test.txt"),
                   );
-                  _updateStatus("Get object: ${resp.statusCode}, ${resp.data.length} bytes");
+                  _updateStatus(
+                      "Get object: ${resp.statusCode}, ${resp.data.length} bytes");
                 },
                 child: const Text("Get object"),
               ),
@@ -130,7 +136,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   final DeleteObjectResult result = await Client().deleteObject(
                     const DeleteObjectRequest(key: "filename.txt"),
                   );
-                  _updateStatus("Deleted: ${result.deleted}, Status: ${result.statusCode}");
+                  _updateStatus(
+                      "Deleted: ${result.deleted}, Status: ${result.statusCode}");
                 },
                 child: const Text("Delete object"),
               ),
@@ -159,8 +166,71 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               TextButton(
                 onPressed: () async {
-                  final List<DeleteObjectResult> results = await Client().deleteObjects(
-                    const DeleteObjectsRequest(keys: ["filename1.txt", "filename2.txt"]),
+                  final result = await Client().uploadFile(
+                    const UploadFileRequest(
+                      filepath: "/path/to/large-file.zip",
+                      key: "uploads/large-file.zip",
+                      multipartThreshold: 32 * 1024 * 1024,
+                      partSize: 8 * 1024 * 1024,
+                      parallel: 3,
+                      resumable: true,
+                      checkpointDir: "./example/.oss-checkpoints",
+                    ),
+                  );
+                  _updateStatus(
+                      "Auto upload: mode=${result.mode}, key=${result.key}");
+                },
+                child: const Text("Auto upload file"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final result = await Client().multipartUploadFile(
+                    const MultipartUploadFileRequest(
+                      filepath: "/path/to/archive.tar",
+                      key: "uploads/archive.tar",
+                      partSize: 8 * 1024 * 1024,
+                      parallel: 3,
+                      resumable: true,
+                      checkpointDir: "./example/.oss-checkpoints",
+                    ),
+                  );
+                  _updateStatus(
+                    "Multipart upload: key=${result.key}, eTag=${result.eTag}",
+                  );
+                },
+                child: const Text("Multipart upload"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final results = await Client().uploadFiles(
+                    const UploadFilesRequest(
+                      parallel: 2,
+                      files: [
+                        UploadFileRequest(
+                          filepath: "/path/to/a.zip",
+                          key: "uploads/a.zip",
+                          resumable: true,
+                          checkpointDir: "./example/.oss-checkpoints",
+                        ),
+                        UploadFileRequest(
+                          filepath: "/path/to/b.zip",
+                          key: "uploads/b.zip",
+                          resumable: true,
+                          checkpointDir: "./example/.oss-checkpoints",
+                        ),
+                      ],
+                    ),
+                  );
+                  _updateStatus("Auto batch upload: ${results.length} files");
+                },
+                child: const Text("Auto batch upload"),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final List<DeleteObjectResult> results =
+                      await Client().deleteObjects(
+                    const DeleteObjectsRequest(
+                        keys: ["filename1.txt", "filename2.txt"]),
                   );
                   _updateStatus("Batch delete: ${results.length} files, "
                       "allDeleted=${results.every((r) => r.deleted)}");

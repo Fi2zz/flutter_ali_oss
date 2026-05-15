@@ -11,6 +11,7 @@ import 'model/request/delete_object_request.dart';
 import 'model/request/get_object_request.dart';
 import 'model/request/list_buckets_request.dart';
 import 'model/request/list_objects_request.dart';
+import 'model/request/multipart_upload_request.dart';
 import 'model/request/put_object_request.dart';
 import 'model/result/append_object_result.dart';
 import 'model/result/bucket_acl.dart';
@@ -20,6 +21,7 @@ import 'model/result/copy_object_result.dart';
 import 'model/result/delete_object_result.dart';
 import 'model/result/list_buckets_result.dart';
 import 'model/result/list_objects_result.dart';
+import 'model/result/multipart_upload_result.dart';
 import 'model/result/object_meta.dart';
 import 'model/result/put_object_result.dart';
 import 'model/result/regions_result.dart';
@@ -38,37 +40,114 @@ abstract class ClientApi {
   /// 上传对象
   /// 对应阿里云 API: PutObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/putobject
-  Future<PutObjectResult> putObject(PutObjectRequest request, {CancelToken? cancelToken});
+  Future<PutObjectResult> putObject(PutObjectRequest request,
+      {CancelToken? cancelToken});
 
   /// 上传文件
   /// 对应阿里云 API: PutObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/putobject
-  Future<PutObjectResult> putObjectFile(PutObjectFileRequest request, {CancelToken? cancelToken});
+  Future<PutObjectResult> putObjectFile(PutObjectFileRequest request,
+      {CancelToken? cancelToken});
+
+  /// 批量上传文件
+  /// 对应阿里云 API: PutObject
+  /// 文档: https://help.aliyun.com/zh/oss/developer-reference/putobject
+  Future<List<PutObjectResult>> putObjectFiles(
+    PutObjectFilesRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 自动选择普通上传或分片上传
+  Future<UploadFileResult> uploadFile(
+    UploadFileRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 批量自动上传文件
+  Future<List<UploadFileResult>> uploadFiles(
+    UploadFilesRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 初始化分片上传
+  Future<InitiateMultipartUploadResult> initiateMultipartUpload(
+    InitiateMultipartUploadRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 上传分片
+  Future<UploadPartResult> uploadPart(
+    UploadPartRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 完成分片上传
+  Future<CompleteMultipartUploadResult> completeMultipartUpload(
+    CompleteMultipartUploadRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 取消分片上传
+  Future<void> abortMultipartUpload(
+    String key,
+    String uploadId, {
+    String? bucketName,
+    CancelToken? cancelToken,
+  });
+
+  /// 上传本地文件并自动完成分片合并
+  Future<CompleteMultipartUploadResult> multipartUploadFile(
+    MultipartUploadFileRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 批量分片上传本地文件
+  Future<List<CompleteMultipartUploadResult>> multipartUploadFiles(
+    MultipartUploadFilesRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 列举执行中的分片上传任务
+  Future<ListMultipartUploadsResult> listMultipartUploads(
+    ListMultipartUploadsRequest request, {
+    CancelToken? cancelToken,
+  });
+
+  /// 列举指定 uploadId 已上传的分片
+  Future<ListPartsResult> listParts(
+    ListPartsRequest request, {
+    CancelToken? cancelToken,
+  });
 
   /// 追加上传
   /// 对应阿里云 API: AppendObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/appendobject
-  Future<AppendObjectResult> appendObject(AppendObjectRequest request, {CancelToken? cancelToken});
+  Future<AppendObjectResult> appendObject(AppendObjectRequest request,
+      {CancelToken? cancelToken});
 
   /// 复制对象
   /// 对应阿里云 API: CopyObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/copyobject
-  Future<CopyObjectResult> copyObject(CopyObjectRequest request, {CancelToken? cancelToken});
+  Future<CopyObjectResult> copyObject(CopyObjectRequest request,
+      {CancelToken? cancelToken});
 
   /// 获取对象（字节流）
   /// 对应阿里云 API: GetObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/getobject
-  Future<BytesResponse> getObject(GetObjectRequest request, {CancelToken? cancelToken});
+  Future<BytesResponse> getObject(GetObjectRequest request,
+      {CancelToken? cancelToken});
 
   /// 获取对象元数据
   /// 对应阿里云 API: GetObjectMeta
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta
-  Future<ObjectMeta> getObjectMeta(String key, {String? bucketName, CancelToken? cancelToken});
+  Future<ObjectMeta> getObjectMeta(String key,
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 判断对象是否存在
   /// 对应阿里云 API: HeadObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/headobject
-  Future<bool> doesObjectExist(String key, {String? bucketName, CancelToken? cancelToken});
+  Future<bool> doesObjectExist(String key,
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 下载对象到本地文件
   /// 对应阿里云 API: GetObject
@@ -84,7 +163,8 @@ abstract class ClientApi {
   /// 删除对象
   /// 对应阿里云 API: DeleteObject
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/deleteobject
-  Future<DeleteObjectResult> deleteObject(DeleteObjectRequest request, {CancelToken? cancelToken});
+  Future<DeleteObjectResult> deleteObject(DeleteObjectRequest request,
+      {CancelToken? cancelToken});
 
   /// 批量删除对象
   /// 对应阿里云 API: DeleteMultipleObjects
@@ -136,17 +216,20 @@ abstract class ClientApi {
   /// 获取 Bucket 信息
   /// 对应阿里云 API: GetBucketInfo
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo
-  Future<BucketInfo> getBucketInfo({String? bucketName, CancelToken? cancelToken});
+  Future<BucketInfo> getBucketInfo(
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 获取 Bucket 统计
   /// 对应阿里云 API: GetBucketStat
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/getbucketstat
-  Future<BucketStat> getBucketStat({String? bucketName, CancelToken? cancelToken});
+  Future<BucketStat> getBucketStat(
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 获取 Bucket ACL
   /// 对应阿里云 API: GetBucketAcl
   /// 文档: https://help.aliyun.com/zh/oss/developer-reference/getbucketacl
-  Future<BucketAcl> getBucketAcl({String? bucketName, CancelToken? cancelToken});
+  Future<BucketAcl> getBucketAcl(
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 设置 Bucket ACL
   /// 对应阿里云 API: PutBucketAcl
@@ -160,7 +243,8 @@ abstract class ClientApi {
   /// 获取 Bucket 策略
   /// 对应阿里云 API: GetBucketPolicy
   /// 文档: https://help.aliyun.com/zh/oss/user-guide/bucket-policy
-  Future<String?> getBucketPolicy({String? bucketName, CancelToken? cancelToken});
+  Future<String?> getBucketPolicy(
+      {String? bucketName, CancelToken? cancelToken});
 
   /// 设置 Bucket 策略
   /// 对应阿里云 API: PutBucketPolicy
@@ -174,7 +258,8 @@ abstract class ClientApi {
   /// 删除 Bucket 策略
   /// 对应阿里云 API: DeleteBucketPolicy
   /// 文档: https://help.aliyun.com/zh/oss/user-guide/bucket-policy
-  Future<void> deleteBucketPolicy({String? bucketName, CancelToken? cancelToken});
+  Future<void> deleteBucketPolicy(
+      {String? bucketName, CancelToken? cancelToken});
 
   // ==================== 地域操作 ====================
 

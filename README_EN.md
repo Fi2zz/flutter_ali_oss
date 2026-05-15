@@ -28,6 +28,7 @@ The original package `flutter_oss_aliyun` had two core problems:
 2. **Strongly coupled to dio** — introduced unnecessary dependencies and prevented custom HTTP layers
 
 This rewrite solves both:
+
 - **Strongly-typed results** — every API has a dedicated Result class with full IDE autocomplete
 - **Zero dio dependency** — uses `dart:io` HttpClient directly, zero external HTTP dependencies
 - **Simplified init** — just provide an `authenticator` callback; no `stsUrl`, no `Dio` injection
@@ -41,7 +42,7 @@ This rewrite solves both:
 
 ```yaml
 dependencies:
-  flutter_alioss: ^1.0.0
+    flutter_alioss: ^1.0.0
 ```
 
 ### 2. Initialize the client
@@ -115,31 +116,237 @@ assert(del.deleted);
 
 ## Typed Request Classes
 
-| Operation | Legacy (still works) | Typed (recommended) |
-|-----------|---------------------|---------------------|
-| List objects | `listObjects({"max-keys": 10})` | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))` |
-| Put object | `putObject(bytes, "key", option: ...)` | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))` |
-| Copy object | `copyObject(CopyRequestOption(...))` | `copyObjectWithRequest(CopyObjectRequest(...))` |
-| Append object | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))` |
-| Put file | `putObjectFile("/path", option: ...)` | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+| Operation     | Legacy (still works)                      | Typed (recommended)                                                 |
+| ------------- | ----------------------------------------- | ------------------------------------------------------------------- |
+| List objects  | `listObjects({"max-keys": 10})`           | `listObjectsWithRequest(ListObjectsRequest(maxKeys: 10))`           |
+| Put object    | `putObject(bytes, "key", option: ...)`    | `putObjectWithRequest(PutObjectRequest(key: "key", data: bytes))`   |
+| Copy object   | `copyObject(CopyRequestOption(...))`      | `copyObjectWithRequest(CopyObjectRequest(...))`                     |
+| Append object | `appendObject(bytes, "key", position: n)` | `appendObjectWithRequest(AppendObjectRequest(...))`                 |
+| Put file      | `putObjectFile("/path", option: ...)`     | `putObjectFileWithRequest(PutObjectFileRequest(filepath: "/path"))` |
+
+---
+
+## Multipart Upload
+
+For large files, Multipart Upload is recommended. The SDK provides both low-level APIs and high-level helpers.
+
+### High-Level Helper: Single File Multipart Upload
+
+```dart
+final result = await Client().multipartUploadFile(
+  MultipartUploadFileRequest(
+    filepath: '/local/path/archive.tar',
+    key: 'backup/archive.tar',
+    partSize: 8 * 1024 * 1024,
+    parallel: 3,
+    resumable: true,
+    checkpointDir: '/local/path/.oss-checkpoints',
+    onSendProgress: (count, total) {
+      print('overall: $count / $total');
+    },
+    onPartProgress: (partNumber, count, total) {
+      print('part $partNumber: $count / $total');
+    },
+  ),
+);
+
+print(result.bucket);
+print(result.key);
+print(result.eTag);
+```
+
+### High-Level Helper: Batch Multipart Upload
+
+```dart
+final results = await Client().multipartUploadFiles(
+  MultipartUploadFilesRequest(
+    parallel: 2,
+    files: const [
+      MultipartUploadFileRequest(
+        filepath: '/local/path/a.tar',
+        key: 'backup/a.tar',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+      MultipartUploadFileRequest(
+        filepath: '/local/path/b.tar',
+        key: 'backup/b.tar',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+    ],
+    onProgress: (completed, total) {
+      print('batch multipart: $completed / $total');
+    },
+  ),
+);
+
+print(results.map((item) => item.key).toList());
+```
+
+### Low-Level API: Manual Multipart Flow
+
+```dart
+final init = await Client().initiateMultipartUpload(
+  const InitiateMultipartUploadRequest(
+    key: 'backup/manual.tar',
+  ),
+);
+
+final part1 = await Client().uploadPart(
+  UploadPartRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    partNumber: 1,
+    data: bytesPart1,
+  ),
+);
+
+final part2 = await Client().uploadPart(
+  UploadPartRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    partNumber: 2,
+    data: bytesPart2,
+  ),
+);
+
+final complete = await Client().completeMultipartUpload(
+  CompleteMultipartUploadRequest(
+    key: 'backup/manual.tar',
+    uploadId: init.uploadId,
+    parts: [
+      UploadedPart(partNumber: 1, eTag: part1.eTag),
+      UploadedPart(partNumber: 2, eTag: part2.eTag),
+    ],
+  ),
+);
+
+print(complete.location);
+```
+
+### Inspect And Abort Multipart Tasks
+
+```dart
+final uploads = await Client().listMultipartUploads(
+  const ListMultipartUploadsRequest(prefix: 'backup/'),
+);
+
+final first = uploads.uploads.first;
+
+final parts = await Client().listParts(
+  ListPartsRequest(
+    key: first.key,
+    uploadId: first.uploadId,
+  ),
+);
+
+print(parts.parts.length);
+
+await Client().abortMultipartUpload(first.key, first.uploadId);
+```
+
+### Resume Notes
+
+- With `resumable: true`, the SDK stores `uploadId` and completed parts in `checkpointDir`
+- Re-running the same upload resumes missing parts only
+- If file size or modification time changes, the old checkpoint is dropped automatically
+- Without `resumable`, failed multipart uploads are aborted automatically
+
+---
+
+## Auto Upload And Resume
+
+Small files can use simple upload, while large files can switch to Multipart Upload automatically:
+
+```dart
+final result = await Client().uploadFile(
+  UploadFileRequest(
+    filepath: '/local/path/video.mp4',
+    key: 'videos/video.mp4',
+    multipartThreshold: 32 * 1024 * 1024,
+    partSize: 8 * 1024 * 1024,
+    parallel: 3,
+    resumable: true,
+    checkpointDir: '/local/path/.oss-checkpoints',
+    onSendProgress: (count, total) {
+      print('overall: $count / $total');
+    },
+    onPartProgress: (partNumber, count, total) {
+      print('part $partNumber: $count / $total');
+    },
+  ),
+);
+
+print(result.mode);
+print(result.location);
+```
+
+If the upload fails midway, calling the same `UploadFileRequest` again reuses the checkpoint file and only uploads missing parts.
+
+### Batch Auto Upload
+
+```dart
+final results = await Client().uploadFiles(
+  UploadFilesRequest(
+    parallel: 2,
+    files: const [
+      UploadFileRequest(
+        filepath: '/local/path/a.zip',
+        key: 'backup/a.zip',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+      UploadFileRequest(
+        filepath: '/local/path/b.zip',
+        key: 'backup/b.zip',
+        resumable: true,
+        checkpointDir: '/local/path/.oss-checkpoints',
+      ),
+    ],
+    onProgress: (completed, total) {
+      print('batch: $completed / $total');
+    },
+  ),
+);
+
+print(results.map((item) => item.mode).toList());
+```
+
+### Inspect Multipart Tasks
+
+```dart
+final uploads = await Client().listMultipartUploads(
+  const ListMultipartUploadsRequest(prefix: 'backup/'),
+);
+
+final parts = await Client().listParts(
+  ListPartsRequest(
+    key: uploads.uploads.first.key,
+    uploadId: uploads.uploads.first.uploadId,
+  ),
+);
+
+print(parts.parts.length);
+```
 
 ---
 
 ## Typed Result Classes
 
-| API Method | Return Type | Key Fields |
-|------------|-------------|------------|
-| `putObject` / `putObjectWithRequest` | `PutObjectResult` | `eTag`, `statusCode`, `versionId` |
-| `copyObject` / `copyObjectWithRequest` | `CopyObjectResult` | `eTag`, `lastModified` |
-| `appendObject` / `appendObjectWithRequest` | `AppendObjectResult` | `nextPosition`, `eTag` |
-| `deleteObject` | `DeleteObjectResult` | `deleted`, `statusCode`, `key` |
-| `getObjectMeta` | `ObjectMeta` | `contentLength`, `contentType`, `lastModified`, `eTag` |
-| `listObjects` / `listObjectsWithRequest` | `ListObjectsResult` | `objects: List<OSSObject>`, `isTruncated`, `nextContinuationToken` |
-| `listBuckets` / `listBucketsWithRequest` | `ListBucketsResult` | `buckets: List<Bucket>`, `owner` |
-| `getBucketInfo` | `BucketInfo` | `name`, `location`, `creationDate`, `acl`, `storageClass` |
-| `getBucketStat` | `BucketStat` | `storage`, `objectCount`, `standardStorage`, `archiveStorage` |
-| `getBucketAcl` | `BucketAcl` | `grant` (e.g. `"private"`, `"public-read"`) |
-| `getAllRegions` / `getRegion` | `RegionsResult` | `regions: List<Region>` |
+| API Method                                 | Return Type          | Key Fields                                                         |
+| ------------------------------------------ | -------------------- | ------------------------------------------------------------------ |
+| `putObject` / `putObjectWithRequest`       | `PutObjectResult`    | `eTag`, `statusCode`, `versionId`                                  |
+| `copyObject` / `copyObjectWithRequest`     | `CopyObjectResult`   | `eTag`, `lastModified`                                             |
+| `appendObject` / `appendObjectWithRequest` | `AppendObjectResult` | `nextPosition`, `eTag`                                             |
+| `deleteObject`                             | `DeleteObjectResult` | `deleted`, `statusCode`, `key`                                     |
+| `getObjectMeta`                            | `ObjectMeta`         | `contentLength`, `contentType`, `lastModified`, `eTag`             |
+| `listObjects` / `listObjectsWithRequest`   | `ListObjectsResult`  | `objects: List<OSSObject>`, `isTruncated`, `nextContinuationToken` |
+| `listBuckets` / `listBucketsWithRequest`   | `ListBucketsResult`  | `buckets: List<Bucket>`, `owner`                                   |
+| `getBucketInfo`                            | `BucketInfo`         | `name`, `location`, `creationDate`, `acl`, `storageClass`          |
+| `getBucketStat`                            | `BucketStat`         | `storage`, `objectCount`, `standardStorage`, `archiveStorage`      |
+| `getBucketAcl`                             | `BucketAcl`          | `grant` (e.g. `"private"`, `"public-read"`)                        |
+| `getAllRegions` / `getRegion`              | `RegionsResult`      | `regions: List<Region>`                                            |
 
 ---
 
@@ -165,12 +372,12 @@ for (final object in result.objects) {
 
 Reference: [Storage Class Overview](https://help.aliyun.com/zh/oss/user-guide/overview-of-storage-classes)
 
-| Enum Value | OSS Value | Use Case |
-|------------|-----------|----------|
-| `StorageType.standard` | `"STANDARD"` | Frequently accessed images, videos, files |
-| `StorageType.ia` | `"IA"` | Backups accessed 1-2 times per month |
-| `StorageType.archive` | `"ARCHIVE"` | Long-term archive, requires thawing |
-| `StorageType.coldArchive` | `"COLDARCHIVE"` | Ultra-long-term cold archive |
+| Enum Value                | OSS Value       | Use Case                                  |
+| ------------------------- | --------------- | ----------------------------------------- |
+| `StorageType.standard`    | `"STANDARD"`    | Frequently accessed images, videos, files |
+| `StorageType.ia`          | `"IA"`          | Backups accessed 1-2 times per month      |
+| `StorageType.archive`     | `"ARCHIVE"`     | Long-term archive, requires thawing       |
+| `StorageType.coldArchive` | `"COLDARCHIVE"` | Ultra-long-term cold archive              |
 
 ---
 
@@ -178,34 +385,42 @@ Reference: [Storage Class Overview](https://help.aliyun.com/zh/oss/user-guide/ov
 
 Reference: [Access Control (ACL)](https://help.aliyun.com/zh/oss/user-guide/acls)
 
-| Enum Value | OSS Value | Description |
-|------------|-----------|-------------|
-| `AclMode.private` | `"private"` | Only owner can read/write |
-| `AclMode.publicRead` | `"public-read"` | Anyone can read, only owner can write |
+| Enum Value                | OSS Value             | Description                             |
+| ------------------------- | --------------------- | --------------------------------------- |
+| `AclMode.private`         | `"private"`           | Only owner can read/write               |
+| `AclMode.publicRead`      | `"public-read"`       | Anyone can read, only owner can write   |
 | `AclMode.publicReadWrite` | `"public-read-write"` | Anyone can read/write (not recommended) |
-| `AclMode.inherited` | `"default"` | Inherit Bucket ACL |
+| `AclMode.inherited`       | `"default"`           | Inherit Bucket ACL                      |
 
 ---
 
 ## API Reference Table
 
-| SDK Method | Alibaba Cloud OSS API | Documentation |
-|------------|----------------------|---------------|
-| `putObject` / `putObjectWithRequest` | PutObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/putobject) |
-| `getObject` / `getObjectWithRequest` | GetObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
-| `getObjectMeta` | GetObjectMeta | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta) |
-| `copyObject` / `copyObjectWithRequest` | CopyObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/copyobject) |
-| `appendObject` / `appendObjectWithRequest` | AppendObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/appendobject) |
-| `deleteObject` | DeleteObject | [Docs](https://help.aliyun.com/zh/oss/developer-reference/deleteobject) |
-| `listObjects` / `listObjectsWithRequest` | ListObjectsV2 | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2) |
-| `listBuckets` / `listBucketsWithRequest` | ListBuckets | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listbuckets) |
-| `getBucketInfo` | GetBucketInfo | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo) |
-| `getBucketStat` | GetBucketStat | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat) |
-| `getBucketAcl` / `putBucketAcl` | GetBucketAcl / PutBucketAcl | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl) |
-| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy | [Docs](https://help.aliyun.com/zh/oss/user-guide/bucket-policy) |
-| `getSignedUrl` | Signed URL | [Docs](https://help.aliyun.com/zh/oss/developer-reference/signatures) |
-| `downloadObject` | GetObject (stream download) | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject) |
-| `getAllRegions` / `getRegion` | GetRegion | [Docs](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints) |
+| SDK Method                                                   | Alibaba Cloud OSS API                                          | Documentation                                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `putObject` / `putObjectWithRequest`                         | PutObject                                                      | [Docs](https://help.aliyun.com/zh/oss/developer-reference/putobject)               |
+| `getObject` / `getObjectWithRequest`                         | GetObject                                                      | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject)               |
+| `getObjectMeta`                                              | GetObjectMeta                                                  | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobjectmeta)           |
+| `copyObject` / `copyObjectWithRequest`                       | CopyObject                                                     | [Docs](https://help.aliyun.com/zh/oss/developer-reference/copyobject)              |
+| `appendObject` / `appendObjectWithRequest`                   | AppendObject                                                   | [Docs](https://help.aliyun.com/zh/oss/developer-reference/appendobject)            |
+| `deleteObject`                                               | DeleteObject                                                   | [Docs](https://help.aliyun.com/zh/oss/developer-reference/deleteobject)            |
+| `listObjects` / `listObjectsWithRequest`                     | ListObjectsV2                                                  | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listobjectsv2)           |
+| `listBuckets` / `listBucketsWithRequest`                     | ListBuckets                                                    | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listbuckets)             |
+| `getBucketInfo`                                              | GetBucketInfo                                                  | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketinfo)           |
+| `getBucketStat`                                              | GetBucketStat                                                  | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketstat)           |
+| `getBucketAcl` / `putBucketAcl`                              | GetBucketAcl / PutBucketAcl                                    | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getbucketacl)            |
+| `getBucketPolicy` / `putBucketPolicy` / `deleteBucketPolicy` | Bucket Policy                                                  | [Docs](https://help.aliyun.com/zh/oss/user-guide/bucket-policy)                    |
+| `getSignedUrl`                                               | Signed URL                                                     | [Docs](https://help.aliyun.com/zh/oss/developer-reference/signatures)              |
+| `downloadObject`                                             | GetObject (stream download)                                    | [Docs](https://help.aliyun.com/zh/oss/developer-reference/getobject)               |
+| `getAllRegions` / `getRegion`                                | GetRegion                                                      | [Docs](https://help.aliyun.com/zh/oss/developer-reference/regions-endpoints)       |
+| `initiateMultipartUpload`                                    | InitiateMultipartUpload                                        | [Docs](https://help.aliyun.com/zh/oss/developer-reference/initiatemultipartupload) |
+| `uploadPart`                                                 | UploadPart                                                     | [Docs](https://help.aliyun.com/zh/oss/developer-reference/uploadpart)              |
+| `completeMultipartUpload`                                    | CompleteMultipartUpload                                        | [Docs](https://help.aliyun.com/zh/oss/developer-reference/completemultipartupload) |
+| `abortMultipartUpload`                                       | AbortMultipartUpload                                           | [Docs](https://help.aliyun.com/zh/oss/developer-reference/abortmultipartupload)    |
+| `listMultipartUploads`                                       | ListMultipartUploads                                           | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listmultipartuploads)    |
+| `listParts`                                                  | ListParts                                                      | [Docs](https://help.aliyun.com/zh/oss/developer-reference/listparts)               |
+| `multipartUploadFile` / `multipartUploadFiles`               | Multipart Upload (high-level SDK helper)                       | [Docs](https://help.aliyun.com/zh/oss/user-guide/multipart-upload)                 |
+| `uploadFile` / `uploadFiles`                                 | Auto-select simple or multipart upload (high-level SDK helper) | [Docs](https://help.aliyun.com/zh/oss/user-guide/multipart-upload)                 |
 
 ---
 
@@ -247,14 +462,14 @@ Common OSS error codes: [Error Responses](https://help.aliyun.com/zh/oss/develop
 
 ## Breaking Changes from `flutter_oss_aliyun`
 
-| Before | After |
-|--------|-------|
-| `Client.init(stsUrl: ..., authGetter: ...)` | `Client.init(authenticator: ...)` (required) |
-| `Client.init(dio: myDio)` | Removed — dio no longer used |
-| `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)` |
-| `Future<Response<dynamic>> putObject(...)` | `Future<PutObjectResult> putObject(...)` |
-| `CancelToken` from `package:dio` | `CancelToken` from `package:flutter_alioss` |
-| `Response<dynamic>` from dio | `BytesResponse`, `StringResponse`, `EmptyResponse` |
+| Before                                       | After                                              |
+| -------------------------------------------- | -------------------------------------------------- |
+| `Client.init(stsUrl: ..., authGetter: ...)`  | `Client.init(authenticator: ...)` (required)       |
+| `Client.init(dio: myDio)`                    | Removed — dio no longer used                       |
+| `Future<Response<dynamic>> listObjects(...)` | `Future<ListObjectsResult> listObjects(...)`       |
+| `Future<Response<dynamic>> putObject(...)`   | `Future<PutObjectResult> putObject(...)`           |
+| `CancelToken` from `package:dio`             | `CancelToken` from `package:flutter_alioss`        |
+| `Response<dynamic>` from dio                 | `BytesResponse`, `StringResponse`, `EmptyResponse` |
 
 ---
 

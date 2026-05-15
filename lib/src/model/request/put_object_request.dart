@@ -93,3 +93,24 @@ class PutObjectFileRequest {
   /// Progress callback for receiving response.
   final ProgressCallback? onReceiveProgress;
 }
+
+/// Progress callback for batch file uploads.
+typedef BatchUploadProgressCallback = void Function(int completed, int total);
+
+/// Request parameters for uploading multiple files.
+class PutObjectFilesRequest {
+  const PutObjectFilesRequest({
+    required this.files,
+    this.parallel = 3,
+    this.onProgress,
+  });
+
+  /// Files to upload.
+  final List<PutObjectFileRequest> files;
+
+  /// Max concurrent uploads.
+  final int parallel;
+
+  /// Progress callback for completed uploads.
+  final BatchUploadProgressCallback? onProgress;
+}
